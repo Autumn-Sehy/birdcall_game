@@ -271,14 +271,13 @@ if user_audio and not st.session_state.mimic_submitted:
                     score = 0
                 st.session_state.mimic_submitted = True
                 st.metric("Similarity Score:", f"{score}%")
-                with st.spinner("Visualizing your call..."):
-                    reducer, species_df_umap = get_reducer(species)
-                    if reducer and not species_df_umap.empty:
-                        umap_df = run_umap(reducer, species_df_umap, user_embedding)
-                        if not umap_df.empty:
-                            fig = px.scatter_3d(umap_df, color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"})
-                            st.plotly_chart(fig, use_container_width=True)
-                            st.caption("Your call is orange; real bird calls are green.")
+                reducer, species_df_umap = get_reducer(species)
+                if reducer and not species_df_umap.empty:
+                    umap_df = run_umap(reducer, species_df_umap, user_embedding)
+                    if not umap_df.empty:
+                        fig = px.scatter_3d(umap_df, x="umap_x", y="umap_y", z="umap_z", color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"})
+                        st.plotly_chart(fig, use_container_width=True)
+                        st.caption("Your call is orange; real bird calls are green.")
         else:
             st.error(f"Reference embedding for {relative_ref_key} not found.")
     Path(user_audio_path).unlink(missing_ok=True)

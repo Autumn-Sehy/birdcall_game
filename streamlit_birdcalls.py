@@ -18,7 +18,7 @@ Known issues:
 """
 
 # -------------------------------------------------------------------------
-# Streamlit setup (must precede any other st.* call)
+# Streamlit setup
 # -------------------------------------------------------------------------
 import streamlit as st
 st.set_page_config(
@@ -28,14 +28,14 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------------------
-# Imports - standard -> third-party -> local
+# Imports 
 # -------------------------------------------------------------------------
 import io
 import os
 import random
 import tempfile
 from pathlib import Path
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple
 
 import boto3
 import numpy as np
@@ -54,7 +54,7 @@ from config import species_to_scrape
 # AWS / S3 helpers
 # -------------------------------------------------------------------------
 
-DEFAULT_BUCKET = "-database"
+DEFAULT_BUCKET = "bird-database"
 
 @st.cache_resource(show_spinner="Connecting to S3...")
 def get_s3_client():
@@ -74,7 +74,7 @@ def list_audio_keys(species: str) -> list[str]:
     """Return all object keys for the given species folder (mp3/wav only)."""
     paginator = CLIENT.get_paginator("list_objects_v2")
     keys = []
-    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"{species}/"):
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"Data/{species}/"):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if key.lower().endswith((".mp3", ".wav")):
@@ -111,16 +111,16 @@ if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
 def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
     processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
     model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h").to(device)
-    _ = model(torch.zeros(1, 16000, device=device))  # warm-up
+    _ = model(torch.zeros(1, 16000, device=device)) 
     return processor, model
 
 
 @st.cache_data(show_spinner="Fetching embeddings...")
 def load_all_embeddings() -> dict[str, np.ndarray]:
-    obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="all_embeddings.pt")  # updated key
+    obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="all_embeddings.pt") 
     buf = io.BytesIO(obj["Body"].read())
     embeddings = torch.load(buf, map_location="cpu")
-    return {k: v.numpy() for k, v in embeddings.items()}  # convert tensors to NumPy
+    return {k: v.numpy() for k, v in embeddings.items()}  
 
 
 
@@ -203,28 +203,32 @@ def run_umap(reducer: UMAP, species_df: pd.DataFrame, user_emb: np.ndarray) -> p
     return df2
 
 # -------------------------------------------------------------------------
-# Session state init
+# Loading message at the start
 # -------------------------------------------------------------------------
+with st.spinner("Fetching birds and recording calls in the field, please wait a minute or so to load..."):
+    # -------------------------------------------------------------------------
+    # Session state init
+    # -------------------------------------------------------------------------
 
-all_species = [s for s in species_to_scrape if s != "Eastern Cattle Eagret"]
+    all_species = [s for s in species_to_scrape if s != "Eastern Cattle Eagret"]
 
-if "current_species" not in st.session_state:
-    st.session_state.current_species = random.choice(all_species)
-if "previous_species" not in st.session_state:
-    st.session_state.previous_species = []
-if "selected_key" not in st.session_state:
-    st.session_state.selected_key = None
-if "mimic_submitted" not in st.session_state:
-    st.session_state.mimic_submitted = False
+    if "current_species" not in st.session_state:
+        st.session_state.current_species = random.choice(all_species)
+    if "previous_species" not in st.session_state:
+        st.session_state.previous_species = []
+    if "selected_key" not in st.session_state:
+        st.session_state.selected_key = None
+    if "mimic_submitted" not in st.session_state:
+        st.session_state.mimic_submitted = False
 
-species = st.session_state.current_species
+    species = st.session_state.current_species
 
 # ---------------------------------------------------------------------
 # UI - reference image and audio
 # ---------------------------------------------------------------------
 st.title("Are you good at making bird calls?")
 
-img_key = f"Images/{species}.jpg"
+img_key = f"Data/Images/{species}.jpg"
 try:
     img_bytes = CLIENT.get_object(Bucket=S3_BUCKET, Key=img_key)["Body"].read()
     st.image(img_bytes)
@@ -233,8 +237,8 @@ except Exception:
 
 # Choose a reference clip
 keys = list_audio_keys(species)
-valid_keys: List[str] = []
-durations: Dict[str, float] = {}
+valid_keys = []
+durations = {}
 for key in keys:
     try:
         tmp = download_to_temp(key)
@@ -286,7 +290,8 @@ if mimic and not st.session_state.mimic_submitted:
         df_plot = run_umap(reducer, species_df, user_emb=user_emb)
         fig = px.scatter_3d(
             df_plot,
-            color_discrete_map={"Bird": "#	babd8d", "User": "#fa9500"},
+            color="type",
+            color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"},
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -319,4 +324,3 @@ with col2:
             st.rerun()
     else:
         st.button("🎶 Try the call again", disabled=True)
-

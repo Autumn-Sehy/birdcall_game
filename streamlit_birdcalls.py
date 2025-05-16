@@ -153,17 +153,15 @@ def get_species_df(species: str) -> pd.DataFrame:
     df["s3_key"] = s3_keys
     return df
 
-# Remove caching on UMAP to avoid pickling issues
-def get_reducer(species: str, n_neighbors: int = 15, min_dist: float = 0.1) -> Tuple[UMAP, pd.DataFrame]:
+def get_reducer(species: str, species_df: pd.DataFrame, n_neighbors: int = 15, min_dist: float = 0.1) -> UMAP:
     with st.spinner("Running UMAP on embeddings…"):
-        species_df = get_species_df(species)
         if species_df.empty or not any(c.startswith("dim_") for c in species_df.columns):
             st.warning(f"No embedding data for {species}.")
-            return None, species_df
+            return None
         cols = [c for c in species_df.columns if c.startswith("dim_")]
         reducer = UMAP(n_components=3, n_neighbors=n_neighbors, min_dist=min_dist, random_state=42)
         reducer.fit(species_df[cols].values)
-    return reducer, species_df
+        return reducer
 
 
 def run_umap(reducer: UMAP, species_df: pd.DataFrame, user_emb: np.ndarray) -> pd.DataFrame:
@@ -172,11 +170,16 @@ def run_umap(reducer: UMAP, species_df: pd.DataFrame, user_emb: np.ndarray) -> p
     cols = [c for c in species_df.columns if c.startswith("dim_")]
     coords = reducer.embedding_
     user_coord = reducer.transform(user_emb.reshape(1, -1))
-    df2 = species_df.copy()
+    df2 = species_df[["file"]].copy() # Keep only 'file' initially
     df2[["umap_x", "umap_y", "umap_z"]] = coords
-    row = dict(zip(cols, user_emb))
-    row.update({"file": "You", "s3_key": "N/A-User", "umap_x": float(user_coord[0,0]), "umap_y": float(user_coord[0,1]), "umap_z": float(user_coord[0,2])})
-    df2 = pd.concat([df2, pd.DataFrame([row])], ignore_index=True)
+    user_row = pd.DataFrame({
+        "file": ["You"],
+        "umap_x": [float(user_coord[0, 0])],
+        "umap_y": [float(user_coord[0, 1])],
+        "umap_z": [float(user_coord[0, 2])],
+        **dict(zip(cols, user_emb)) # Add embedding columns for consistency
+    })
+    df2 = pd.concat([df2, user_row], ignore_index=True)
     df2["type"] = df2["file"].map(lambda f: "User" if f == "You" else "Bird")
     return df2
 
@@ -282,12 +285,13 @@ if user_audio and not st.session_state.mimic_submitted:
             score = max(0, min(100, score))
             st.session_state.mimic_submitted = True
             st.metric("Similarity Score:", f"{score}%")
-            reducer, df_umap = get_reducer(species)
+            df_umap = get_species_df(species) # Get the species DataFrame
+            reducer = get_reducer(species, df_umap) # Fit UMAP every time
             if reducer and not df_umap.empty:
-                df_vis = run_umap(reducer, df_umap, user_emb)
+                df_vis = run_umap(reducer, df_umap.copy(), user_emb) # Pass a copy
                 if not df_vis.empty:
                     fig = px.scatter_3d(df_vis, x="umap_x", y="umap_y", z="umap_z",
-                                         color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"})
+                                        color="type", color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"})
                     st.plotly_chart(fig, use_container_width=True)
                     st.caption("Your call is orange; real birds are green.")
         else:

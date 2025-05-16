@@ -147,7 +147,7 @@ def get_species_df(species: str) -> pd.DataFrame:
     df["s3_key"] = s3_keys
     return df
 
-spinner_text = (f"Fetching {species} birds to compare their call to yours...")
+spinner_text = f"Fetching {species} birds to compare their call to yours..."
 @st.cache_resource(show_spinner=spinner_text)
 def get_reducer(species: str, n_neighbors: int = 15, min_dist: float = 0.1):
     species_df = get_species_df(species)

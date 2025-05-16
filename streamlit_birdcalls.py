@@ -35,7 +35,7 @@ import os
 import random
 import tempfile
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 import boto3
 import numpy as np

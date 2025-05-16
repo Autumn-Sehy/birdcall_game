@@ -1,35 +1,20 @@
-"""Bird Call Mimic Game
-------------------------------------------------
-This Streamlit app lets users practise bird calls. For each round it:
-1. Chooses a random bird species (from `config.species_to_scrape`). There are 10 options I chose from fun bird calls.
-2. The reason I know bird calls is because I'm a montana master naturalist and former Glacier National Park Guide
-3. Plays a short reference clip that lives in **Amazon S3** (bucket `bird-database`).
-4. Lets the user record their own attempt.
-5. Computes Wav2Vec2 embeddings, cosine similarity (for the score) & a 3-D UMAP visualisation.
+# Bird Call Mimic Game  – DEBUG VERSION
+# ------------------------------------------------
+# Changes vs original
+#   • Added explicit seek(0) + empty‑recording guard after st.audio_input
+#   • Added "<=10 s" hint + max_duration param to st.audio_input
+#   • Normalise stereo→mono and sample‑rate in compute_embedding
+#   • Fallback lookup for pre‑computed embeddings by base filename
+#   • Scattered st.write / st.error for easier live debugging
+# ------------------------------------------------
 
-Known issues:
-*It gives everyone pretty high scores, so learning average scores from the cosine
- similarity and creating a more vague 'how good you are' score may be better
-
- Future Goals:
- *Add in more bird species!
- *Work on memory management so users can save their calls
- *Add fun facts about each bird so people can learn as they mimic the bird
-"""
-
-# -------------------------------------------------------------------------
-# Streamlit setup (must precede any other st.* call)
-# -------------------------------------------------------------------------
 import streamlit as st
 st.set_page_config(
-    page_title="Are you good at making bird calls?",
+    page_title="Are you good at making bird calls? (debug)",
     page_icon="🪶",
     layout="wide",
 )
 
-# -------------------------------------------------------------------------
-# Imports - standard -> third-party -> local
-# -------------------------------------------------------------------------
 import io
 import os
 import random
@@ -54,10 +39,9 @@ from config import species_to_scrape
 # -------------------------------------------------------------------------
 # AWS / S3 helpers
 # -------------------------------------------------------------------------
-
 DEFAULT_BUCKET = "bird-database"
 
-@st.cache_resource(show_spinner="Connecting to S3...")
+@st.cache_resource(show_spinner="Connecting to S3…")
 def get_s3_client():
     return boto3.client(
         "s3",
@@ -72,7 +56,7 @@ CLIENT = get_s3_client()
 
 def list_audio_files(species: str) -> list[str]:
     paginator = CLIENT.get_paginator("list_objects_v2")
-    keys = []
+    keys: list[str] = []
     for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"Data/{species}/"):
         for obj in page.get("Contents", []):
             key = obj["Key"]
@@ -116,12 +100,12 @@ def load_all_embeddings():
     obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="all_embeddings.pt")
     buf = io.BytesIO(obj["Body"].read())
     embeddings = torch.load(buf, map_location="cpu")
-    return {k: v.numpy() for k, v in embeddings.items()}
-
+    # 🔑 normalise dictionary keys to base filename only
+    return {Path(k).name: v.numpy() for k, v in embeddings.items()}
 
 
 processor, model = init_model()
-bird_embeddings = load_all_embeddings()
+bird_embeddings: dict[str, np.ndarray] = load_all_embeddings()
 
 # -------------------------------------------------------------------------
 # NumPy utilities
@@ -132,33 +116,42 @@ def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     norm_vec1 = np.linalg.norm(v1)
     norm_vec2 = np.linalg.norm(v2)
     if norm_vec1 == 0 or norm_vec2 == 0:
-        return 0
-    else:
-        return dot / (norm_vec1 * norm_vec2)
+        return 0.0
+    return dot / (norm_vec1 * norm_vec2)
 
 
 @torch.inference_mode()
 def compute_embedding(audio_path: str) -> np.ndarray:
+    """Load audio, down‑mix to mono, resample to 16 kHz, return Wav2Vec2 embedding."""
     waveform, sr = torchaudio.load(audio_path)
-    if sr != 16000:
-        waveform = resample(waveform, sr, 16000)
+
+    # stereo → mono (average) ------------------------------------------------
+    if waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+    # resample --------------------------------------------------------------
+    if sr != 16_000:
+        waveform = resample(waveform, sr, 16_000)
+
     waveform = waveform.to(device)
 
-    with torch.cuda.amp.autocast():
-        inputs = processor(waveform.squeeze(), sampling_rate=16000, return_tensors="pt").to(device)
+    with torch.cuda.amp.autocast(dtype=torch.float16 if torch.cuda.is_available() else torch.bfloat16):
+        inputs = processor(waveform.squeeze(), sampling_rate=16_000, return_tensors="pt").to(device)
         outputs = model(**inputs)
+
+    # mean‑pool -------------------------------------------------------------
     return outputs.last_hidden_state.mean(dim=1).squeeze().cpu().numpy()
 
 # -------------------------------------------------------------------------
-# Data wrangling
+# Data wrangling helpers
 # -------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def get_species_df(species: str) -> pd.DataFrame:
     keys = list_audio_files(species)
     embs = []
     files = []
+
     for key in keys:
-        emb = bird_embeddings.get(key)
+        emb = bird_embeddings.get(Path(key).name)  # lookup by filename only
         if emb is None:
             local_path = download_to_temp(key)
             emb = compute_embedding(local_path)
@@ -176,36 +169,37 @@ def run_umap(df: pd.DataFrame, user_emb: np.ndarray,
     embed_cols = [c for c in df.columns if c.startswith("dim_")]
     df_user = pd.DataFrame(user_emb.reshape(1, -1), columns=embed_cols)
     df_user["file"] = ["You"]
-    df = pd.concat([df, df_user], ignore_index=True)
+    df2 = pd.concat([df, df_user], ignore_index=True)
+
     reducer = UMAP(n_components=3, n_neighbors=n_neighbors,
                    min_dist=min_dist, random_state=42)
-    coords = reducer.fit_transform(df[embed_cols].values)
-    df2 = df.copy()
-    df2["umap_x"], df2["umap_y"], df2["umap_z"] = coords[:, 0], coords[:, 1], coords[:, 2]
+    coords = reducer.fit_transform(df2[embed_cols].values)
+    df2[["umap_x", "umap_y", "umap_z"]] = coords
     df2["type"] = df2["file"].apply(lambda f: "User" if f == "You" else "Bird")
     return df2
 
 # -------------------------------------------------------------------------
-# Loading message at the start
+# App state initialisation
 # -------------------------------------------------------------------------
-with st.spinner("Fetching birds and recording calls in the field, please wait a minute or so to load..."):
+with st.spinner("Fetching birds and recording calls in the field – please wait …"):
     all_species = [s for s in species_to_scrape if s != "Eastern Cattle Eagret"]
 
-    if "current_species" not in st.session_state:
-        st.session_state.current_species = random.choice(all_species)
-    if "previous_species" not in st.session_state:
-        st.session_state.previous_species = []
-    if "selected_key" not in st.session_state:
-        st.session_state.selected_key = None
-    if "mimic_submitted" not in st.session_state:
-        st.session_state.mimic_submitted = False
+    ss = st.session_state
+    if "current_species" not in ss:
+        ss.current_species = random.choice(all_species)
+    if "previous_species" not in ss:
+        ss.previous_species = []
+    if "selected_key" not in ss:
+        ss.selected_key = None
+    if "mimic_submitted" not in ss:
+        ss.mimic_submitted = False
 
-    species = st.session_state.current_species
+    species = ss.current_species
 
-# ---------------------------------------------------------------------
-# UI - reference image and audio
-# ---------------------------------------------------------------------
-st.title("Are you good at making bird calls?")
+# -------------------------------------------------------------------------
+# UI – reference image + audio
+# -------------------------------------------------------------------------
+st.title("Are you good at making bird calls? (debug)")
 
 img_key = f"Images/{species}.jpg"
 try:
@@ -214,10 +208,10 @@ try:
 except Exception:
     st.write("(no image available for this species)")
 
-# Choose a reference clip
+# Choose reference clip -----------------------------------------------------
 audio_files = list_audio_files(species)
-valid_files = []
-durations = {}
+durations: dict[str, float] = {}
+valid_files: list[str] = []
 for key in audio_files:
     try:
         tmp = download_to_temp(key)
@@ -225,96 +219,101 @@ for key in audio_files:
         durations[key] = d
         if d <= 20:
             valid_files.append(key)
-    except Exception:
-        continue
+    except Exception as e:
+        st.write(f"⚠️ Could not load {key}: {e}")
 
 if not valid_files:
-    if durations:
-        valid_files = [min(durations, key=durations.get)]
-    else:
-        valid_files = audio_files
+    valid_files = [min(durations, key=durations.get)] if durations else audio_files
 
-if st.session_state.selected_key not in valid_files:
-    st.session_state.selected_key = random.choice(valid_files)
+if ss.selected_key not in valid_files:
+    ss.selected_key = random.choice(valid_files)
 
-ref_key = st.session_state.selected_key
+ref_key = ss.selected_key
 audio_url = presigned_url(ref_key)
 st.audio(audio_url, format="audio/mpeg")
 
-# ---------------------------------------------------------------------
+# -------------------------------------------------------------------------
 # User recording, similarity score and UMAP
-# ---------------------------------------------------------------------
+# -------------------------------------------------------------------------
 st.divider()
 st.header(f"Try to mimic the {species}!")
 
 recorder_key = f"mimic_audio_{species}_{Path(ref_key).stem}"
-mimic = st.audio_input("Record your attempt here", key=recorder_key)
+# 🎤  Added max_duration=10 for stability
+mimic = st.audio_input("Record your attempt here (≤10 s)", key=recorder_key, max_duration=10)
 
-if mimic and not st.session_state.mimic_submitted:
+if mimic and not ss.mimic_submitted:
+    mimic.seek(0)                           # 🔑 reset pointer!
+    raw_bytes = mimic.read()
+
+    if len(raw_bytes) == 0:
+        st.error("⚠️ The recorded file is empty. This usually means the browser failed to capture audio.\nTry a shorter clip or a different browser.")
+        st.stop()
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp.write(mimic.read())
+        tmp.write(raw_bytes)
         user_path = tmp.name
 
-    rel_key = ref_key
-    species_emb = bird_embeddings.get(rel_key)
+    # ------------- get reference embedding --------------------------------
+    species_emb = bird_embeddings.get(Path(ref_key).name)
+    if species_emb is None:
+        st.write("Embedding not pre‑computed; computing now …")
+        ref_local = download_to_temp(ref_key)
+        species_emb = compute_embedding(ref_local)
+
     user_emb = compute_embedding(user_path)
     sim = cosine_similarity(species_emb, user_emb)
     score = int((sim + 1) / 2 * 100)
 
-    st.session_state.mimic_submitted = True
+    ss.mimic_submitted = True
 
     st.divider()
-    col1, col2, col3 = st.columns(3)
-    with col2:
-        st.metric("Your call was this similar:", f"{score}%")
+    st.metric("Your call was this similar:", f"{score}%")
 
     st.divider()
-    progress_text = "Comparing your call to the bird database, this will take a moment..."
+    progress_text = "Comparing your call to the bird database …"
     my_bar = st.progress(0, text=progress_text)
-    for percent_complete in range(120):
+    for pc in range(120):
         time.sleep(0.01)
-        my_bar.progress(percent_complete + 1, text=progress_text)
-        
+        my_bar.progress(pc + 1, text=progress_text)
+
     df = get_species_df(species)
-    with st.spinner("Comparing your call with the bird's calls..."):
+    with st.spinner("Computing UMAP …"):
         df_umap = run_umap(df, user_emb=user_emb)
         fig = px.scatter_3d(
             df_umap,
             x="umap_x", y="umap_y", z="umap_z",
             color="type", hover_name="file",
-            color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"}
+            color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"},
         )
         st.plotly_chart(fig, use_container_width=True)
-        st.caption("Your call ('You') is shown in orange. Bird calls are shown in olive.")
+        st.caption("Your call (orange) vs bird calls (olive).")
 
-# ---------------------------------------------------------------------
-# Navigation buttons to try again or do a new bird
-# ---------------------------------------------------------------------
+# -------------------------------------------------------------------------
+# Navigation buttons --------------------------------------------------------
 col1, col2 = st.columns(2)
 
 with col1:
     if st.button("🦉 Try a new bird"):
-        st.session_state.previous_species.append(species)
-        if len(st.session_state.previous_species) > 3:
-            st.session_state.previous_species.pop(0)
-
-        candidates = [s for s in all_species if s != species and s not in st.session_state.previous_species]
+        ss.previous_species.append(species)
+        if len(ss.previous_species) > 3:
+            ss.previous_species.pop(0)
+        candidates = [s for s in all_species if s != species and s not in ss.previous_species]
         if not candidates:
-            st.session_state.previous_species = []
+            ss.previous_species = []
             candidates = [s for s in all_species if s != species]
-
-        st.session_state.current_species = random.choice(candidates)
-        st.session_state.selected_key = None
-        st.session_state.mimic_submitted = False
-        st.session_state.pop(recorder_key, None)
+        ss.current_species = random.choice(candidates)
+        ss.selected_key = None
+        ss.mimic_submitted = False
+        ss.pop(recorder_key, None)
         st.rerun()
 
 with col2:
-    if st.session_state.mimic_submitted:
+    if ss.mimic_submitted:
         if st.button("🎶 Try the call again"):
-            st.session_state.selected_key = random.choice(valid_files)
-            st.session_state.mimic_submitted = False
-            st.session_state.pop(recorder_key, None)
+            ss.selected_key = random.choice(valid_files)
+            ss.mimic_submitted = False
+            ss.pop(recorder_key, None)
             st.rerun()
     else:
         st.button("🎶 Try the call again", disabled=True)

@@ -30,7 +30,7 @@ from config import species_to_scrape
 # Page config
 st.set_page_config(
     page_title="Are you good at making bird calls?",
-    page_icon="🪶",
+    page_icon="🐔",
     layout="wide",
 )
 
@@ -239,7 +239,7 @@ if not s3_keys_for_species:
 # Fetch durations with spinner for user feedback
 valid_audio_keys: List[str] = []
 audio_durations: Dict[str, float] = {}
-with st.spinner("Fetching audio durations..."):
+with st.spinner("Fetching more hummingbird feed..."):
     for key in s3_keys_for_species:
         path = download_to_temp(key)
         try:
@@ -283,7 +283,7 @@ if user_audio and not st.session_state.mimic_submitted:
     if Path(user_path).stat().st_size > 0:
         rel_key = "/".join(ref_key.split("/")[1:])
         if rel_key in bird_embeddings:
-            with st.spinner("Analyzing your recording..."    ):
+            with st.spinner("Analyzing your recording..."):
                 ref_emb = bird_embeddings[rel_key]
                 usr_emb = compute_embedding(user_path)
                 sim = cosine_similarity(ref_emb, usr_emb)

@@ -50,6 +50,7 @@ def get_s3_client():
 S3_BUCKET = st.secrets.get("S3_BUCKET", DEFAULT_BUCKET)
 CLIENT = get_s3_client()
 
+@st.cache_data(show_spinner="Listing S3 audio keys...")
 def list_audio_keys(species: str) -> List[str]:
     keys = []
     try:
@@ -187,6 +188,8 @@ if "selected_key" not in st.session_state:
     st.session_state.selected_key = None
 if "mimic_submitted" not in st.session_state:
     st.session_state.mimic_submitted = False
+if "loaded_species" not in st.session_state:
+    st.session_state.loaded_species = None
 
 with st.spinner("Recording birds, please wait while we gather calls..."):
     species = st.session_state.current_species
@@ -209,18 +212,21 @@ with st.spinner("Recording birds, please wait while we gather calls..."):
     audio_durations: Dict[str, float] = {}
     temp_files_duration = []
 
-    for key in s3_keys_for_species:
-        local_path = download_to_temp(key)
-        temp_files_duration.append(local_path)
-        try:
-            duration = get_duration(path=local_path)
-            audio_durations[key] = duration
-            if duration <= 20:
-                valid_audio_keys.append(key)
-        except Exception as e:
-            st.warning(f"Could not get duration for {key}. Error: {e}")
-    for f in temp_files_duration:
-        Path(f).unlink(missing_ok=True)
+    if st.session_state.loaded_species != species:
+        st.session_state.loaded_species = species
+        with st.spinner(f"Fetching audio details for {species}..."):
+            for key in s3_keys_for_species:
+                local_path = download_to_temp(key)
+                temp_files_duration.append(local_path)
+                try:
+                    duration = get_duration(path=local_path)
+                    audio_durations[key] = duration
+                    if duration <= 20:
+                        valid_audio_keys.append(key)
+                except Exception as e:
+                    st.warning(f"Could not get duration for {key}. Error: {e}")
+            for f in temp_files_duration:
+                Path(f).unlink(missing_ok=True)
 
     if not valid_audio_keys:
         valid_audio_keys = [min(audio_durations, key=audio_durations.get)] if audio_durations else s3_keys_for_species
@@ -257,9 +263,8 @@ if user_audio and not st.session_state.mimic_submitted:
             user_embedding = compute_embedding(user_audio_path)
             if user_embedding.size > 0:
                 similarity = cosine_similarity(ref_embedding, user_embedding)
-                # Adjusted scoring logic:
-                if similarity > 0.7:  # Experiment with this threshold
-                    score = int((similarity - 0.7) / 0.3 * 100)  # Adjust scaling
+                if similarity > 0.7:
+                    score = int((similarity - 0.7) / 0.3 * 100)
                     score = max(0, min(100, score))
                 else:
                     score = 0
@@ -286,6 +291,7 @@ with col1:
         st.session_state.current_species = random.choice(candidates or all_species)
         st.session_state.selected_key = None
         st.session_state.mimic_submitted = False
+        st.session_state.loaded_species = None # Force re-load on new species
         if recorder_key in st.session_state:
             st.session_state.pop(recorder_key)
         st.rerun()

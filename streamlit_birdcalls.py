@@ -230,7 +230,7 @@ if not s3_keys_for_species:
 # Fetch durations with spinner for user feedback
 valid_audio_keys: List[str] = []
 audio_durations: Dict[str, float] = {}
-with st.spinner("Fetching audio durations..."):
+with st.spinner("Running from angry eagles..."):
     for key in s3_keys_for_species:
         path = download_to_temp(key)
         try:

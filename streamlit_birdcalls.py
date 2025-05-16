@@ -203,20 +203,20 @@ with st.spinner("Recording birds, please wait while we gather calls..."):
     species = st.session_state.current_species
 species = st.session_state.current_species
 
-    st.title("Are you good at making bird calls?")
+st.title("Are you good at making bird calls?")
 st.title("Are you good at making bird calls?")
 
-    img_key = f"Images/{species}.jpg"
-    try:
-        img_bytes = CLIENT.get_object(Bucket=S3_BUCKET, Key=img_key)["Body"].read()
-        st.image(img_bytes)
-    except Exception:
-        st.caption(f"(No image for {species})")
+img_key = f"Images/{species}.jpg"
+try:
+    img_bytes = CLIENT.get_object(Bucket=S3_BUCKET, Key=img_key)["Body"].read()
+    st.image(img_bytes)
+except Exception:
+    st.caption(f"(No image for {species})")
 
-    s3_keys_for_species = list_audio_keys(species)
-    if not s3_keys_for_species:
-        st.error(f"No audio files found for {species}.")
-        st.stop()
+s3_keys_for_species = list_audio_keys(species)
+if not s3_keys_for_species:
+    st.error(f"No audio files found for {species}.")
+    st.stop()
 img_key = f"Images/{species}.jpg"
 try:
     img_bytes = CLIENT.get_object(Bucket=S3_BUCKET, Key=img_key)["Body"].read()

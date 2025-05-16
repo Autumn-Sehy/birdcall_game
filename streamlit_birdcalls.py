@@ -82,14 +82,14 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
-@st.cache_resource(show_spinner="Loading Wav2Vec2 model...")
+@st.cache_resource(show_spinner="Running from angry eagles...")
 def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
     processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
     model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h").to(device)
     model(torch.zeros(1, 16000, device=device))
     return processor, model
 
-@st.cache_data(show_spinner="Fetching pre-computed embeddings...")
+@st.cache_data(show_spinner="Fetching hummingbird beed...")
 def load_all_embeddings() -> Dict[str, np.ndarray]:
     embeddings_key = "all_embeddings.pt"
     try:
@@ -147,7 +147,7 @@ def get_species_df(species: str) -> pd.DataFrame:
     df["s3_key"] = s3_keys
     return df
 
-spinner_text = f"Fetching {species} birds to compare their call to yours..."
+spinner_text = "Fetching birds to compare their call to yours..."
 @st.cache_resource(show_spinner=spinner_text)
 def get_reducer(species: str, n_neighbors: int = 15, min_dist: float = 0.1):
     species_df = get_species_df(species)

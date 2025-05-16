@@ -54,7 +54,7 @@ from config import species_to_scrape
 # AWS / S3 helpers
 # -------------------------------------------------------------------------
 
-DEFAULT_BUCKET = "bird-database"
+DEFAULT_BUCKET = "-database"
 
 @st.cache_resource(show_spinner="Connecting to S3...")
 def get_s3_client():
@@ -117,7 +117,7 @@ def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
 
 @st.cache_data(show_spinner="Fetching embeddings...")
 def load_all_embeddings() -> dict[str, np.ndarray]:
-    obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="bird_embeddings.pt")  # updated key
+    obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="all_embeddings.pt")  # updated key
     buf = io.BytesIO(obj["Body"].read())
     embeddings = torch.load(buf, map_location="cpu")
     return {k: v.numpy() for k, v in embeddings.items()}  # convert tensors to NumPy

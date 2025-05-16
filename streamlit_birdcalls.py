@@ -116,12 +116,12 @@ def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
 
 
 @st.cache_data(show_spinner="Fetching embeddings...")
-def load_all_embeddings() -> Dict[str, np.ndarray]:
-    """Load the single embeddings.npz stored in S3 -> dict[clip_key] = vector."""
-    obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="embeddings/bird_embeddings.npz")
-    data = io.BytesIO(obj["Body"].read())
-    npz = np.load(data)
-    return {k: npz[k] for k in npz.files}
+def load_all_embeddings() -> dict[str, np.ndarray]:
+    obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="bird_embeddings.pt")  # updated key
+    buf = io.BytesIO(obj["Body"].read())
+    embeddings = torch.load(buf, map_location="cpu")
+    return {k: v.numpy() for k, v in embeddings.items()}  # convert tensors to NumPy
+
 
 
 processor, model = init_model()

@@ -1,4 +1,5 @@
-"""Bird Call Mimic Game
+"""
+Bird Call Mimic Game
 ------------------------------------------------
 This Streamlit app lets users practise bird calls. For each round it:
 1. Chooses a random bird species (from `config.species_to_scrape`).
@@ -7,6 +8,7 @@ This Streamlit app lets users practise bird calls. For each round it:
 3. Lets the user record their own attempt.
 4. Computes Wav2Vec2 embeddings, cosine similarity (for the score) & a 3-D UMAP visualisation.
 """
+
 import io
 import random
 import tempfile
@@ -37,7 +39,7 @@ def get_s3_client():
         session = boto3.Session(
             aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
             aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"],
-            region_name=st.secrets.get("AWS_REGION", "us-east-2"),
+            region_name="us-east-2",
         )
         return session.client(
             "s3",
@@ -81,14 +83,14 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
-@st.cache_resource(show_spinner="Loading Wav2Vec2 model...")
+@st.cache_resource(show_spinner="Running from angry eagles...")
 def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
     processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
     model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h").to(device)
     model(torch.zeros(1, 16000, device=device))
     return processor, model
 
-@st.cache_data(show_spinner="Fetching pre-computed embeddings...")
+@st.cache_data(show_spinner="Fetching hummingbird feed...")
 def load_all_embeddings() -> Dict[str, np.ndarray]:
     embeddings_key = "all_embeddings.pt"
     try:
@@ -188,27 +190,27 @@ if "selected_key" not in st.session_state:
 if "mimic_submitted" not in st.session_state:
     st.session_state.mimic_submitted = False
 
-species = st.session_state.current_species
+with st.spinner("Recording birds, please wait while we gather calls..."):
+    species = st.session_state.current_species
 
-st.title("Are you good at making bird calls?")
+    st.title("Are you good at making bird calls?")
 
-img_key = f"Images/{species}.jpg"
-try:
-    img_bytes = CLIENT.get_object(Bucket=S3_BUCKET, Key=img_key)["Body"].read()
-    st.image(img_bytes)
-except Exception:
-    st.caption(f"(No image for {species})")
+    img_key = f"Images/{species}.jpg"
+    try:
+        img_bytes = CLIENT.get_object(Bucket=S3_BUCKET, Key=img_key)["Body"].read()
+        st.image(img_bytes)
+    except Exception:
+        st.caption(f"(No image for {species})")
 
-s3_keys_for_species = list_audio_keys(species)
-if not s3_keys_for_species:
-    st.error(f"No audio files found for {species}.")
-    st.stop()
+    s3_keys_for_species = list_audio_keys(species)
+    if not s3_keys_for_species:
+        st.error(f"No audio files found for {species}.")
+        st.stop()
 
-valid_audio_keys: List[str] = []
-audio_durations: Dict[str, float] = {}
-temp_files_duration = []
+    valid_audio_keys: List[str] = []
+    audio_durations: Dict[str, float] = {}
+    temp_files_duration = []
 
-with st.spinner(f"Selecting a call for {species}..."):
     for key in s3_keys_for_species:
         local_path = download_to_temp(key)
         temp_files_duration.append(local_path)
@@ -222,25 +224,23 @@ with st.spinner(f"Selecting a call for {species}..."):
     for f in temp_files_duration:
         Path(f).unlink(missing_ok=True)
 
-if not valid_audio_keys:
-    valid_audio_keys = [min(audio_durations, key=audio_durations.get)] if audio_durations else s3_keys_for_species
+    if not valid_audio_keys:
+        valid_audio_keys = [min(audio_durations, key=audio_durations.get)] if audio_durations else s3_keys_for_species
 
-if not valid_audio_keys:
-    st.error(f"No suitable audio for {species}.")
-    st.stop()
+    if not valid_audio_keys:
+        st.error(f"No suitable audio for {species}.")
+        st.stop()
 
-if st.session_state.selected_key not in valid_audio_keys or st.session_state.selected_key is None:
-    st.session_state.selected_key = random.choice(valid_audio_keys)
+    if st.session_state.selected_key not in valid_audio_keys or st.session_state.selected_key is None:
+        st.session_state.selected_key = random.choice(valid_audio_keys)
 
-ref_key = st.session_state.selected_key
-ref_audio_url = presigned_url(ref_key)
+    ref_key = st.session_state.selected_key
+    ref_audio_url = presigned_url(ref_key)
 
-st.info(f"Generated audio URL: {ref_audio_url}")  # Debug: Log the URL
-
-if ref_audio_url:
-    st.audio(ref_audio_url)  # Basic usage, let Streamlit infer format
-else:
-    st.error("Could not load reference audio.")
+    if ref_audio_url:
+        st.audio(ref_audio_url)
+    else:
+        st.error("Could not load reference audio.")
 
 st.divider()
 st.header(f"Try to mimic the {species}!")

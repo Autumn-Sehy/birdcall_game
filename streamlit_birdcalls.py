@@ -152,4 +152,148 @@ def get_reducer(species: str, n_neighbors: int = 15, min_dist: float = 0.1):
     if species_df.empty or not any(col.startswith("dim_") for col in species_df.columns):
         st.warning(f"No embedding data for {species}.")
         return None, species_df
-    embed_cols = [c for c in species_df.columns
+    embed_cols = [c for c in species_df.columns if c.startswith("dim_")]
+    reducer = UMAP(n_components=3, n_neighbors=n_neighbors, min_dist=min_dist, random_state=42).fit(species_df[embed_cols].values)
+    return reducer, species_df
+
+def run_umap(reducer: UMAP, species_df: pd.DataFrame, user_emb: np.ndarray) -> pd.DataFrame:
+    if reducer is None or species_df.empty or user_emb is None or user_emb.size == 0:
+        return pd.DataFrame()
+    embed_cols = [c for c in species_df.columns if c.startswith("dim_")]
+    coords_bird = reducer.embedding_
+    coords_user = reducer.transform(user_emb.reshape(1, -1))
+    df2 = species_df.copy()
+    df2[["umap_x", "umap_y", "umap_z"]] = coords_bird
+    user_row = dict(zip(embed_cols, user_emb))
+    user_row.update({"file": "You", "s3_key": "N/A-User", "umap_x": float(coords_user[0, 0]), "umap_y": float(coords_user[0, 1]), "umap_z": float(coords_user[0, 2])})
+    df2 = pd.concat([df2, pd.DataFrame([user_row])], ignore_index=True)
+    df2["type"] = df2["file"].apply(lambda f: "User" if f == "You" else "Bird")
+    return df2
+
+if not species_to_scrape:
+    st.error("`species_to_scrape` is empty in config.py.")
+    st.stop()
+
+all_species = [s for s in species_to_scrape if s != "Eastern Cattle Eagret"]
+if not all_species:
+    st.error("No species available after filtering.")
+    st.stop()
+
+if "current_species" not in st.session_state:
+    st.session_state.current_species = random.choice(all_species)
+if "previous_species" not in st.session_state:
+    st.session_state.previous_species = []
+if "selected_key" not in st.session_state:
+    st.session_state.selected_key = None
+if "mimic_submitted" not in st.session_state:
+    st.session_state.mimic_submitted = False
+
+species = st.session_state.current_species
+
+st.title("Are you good at making bird calls?")
+
+img_key = f"Images/{species}.jpg"
+try:
+    img_bytes = CLIENT.get_object(Bucket=S3_BUCKET, Key=img_key)["Body"].read()
+    st.image(img_bytes)
+except Exception:
+    st.caption(f"(No image for {species})")
+
+s3_keys_for_species = list_audio_keys(species)
+if not s3_keys_for_species:
+    st.error(f"No audio files found for {species}.")
+    st.stop()
+
+valid_audio_keys: List[str] = []
+audio_durations: Dict[str, float] = {}
+temp_files_duration = []
+
+with st.spinner(f"Selecting a call for {species}..."):
+    for key in s3_keys_for_species:
+        local_path = download_to_temp(key)
+        temp_files_duration.append(local_path)
+        try:
+            duration = get_duration(path=local_path)
+            audio_durations[key] = duration
+            if duration <= 20:
+                valid_audio_keys.append(key)
+        except Exception as e:
+            st.warning(f"Could not get duration for {key}. Error: {e}")
+    for f in temp_files_duration:
+        Path(f).unlink(missing_ok=True)
+
+if not valid_audio_keys:
+    valid_audio_keys = [min(audio_durations, key=audio_durations.get)] if audio_durations else s3_keys_for_species
+
+if not valid_audio_keys:
+    st.error(f"No suitable audio for {species}.")
+    st.stop()
+
+if st.session_state.selected_key not in valid_audio_keys or st.session_state.selected_key is None:
+    st.session_state.selected_key = random.choice(valid_audio_keys)
+
+ref_key = st.session_state.selected_key
+ref_audio_url = presigned_url(ref_key)
+
+st.info(f"Generated audio URL: {ref_audio_url}")  # Debug: Log the URL
+
+if ref_audio_url:
+    st.audio(ref_audio_url)  # Basic usage, let Streamlit infer format
+else:
+    st.error("Could not load reference audio.")
+
+st.divider()
+st.header(f"Try to mimic the {species}!")
+
+recorder_key = f"mimic_audio_{species}_{Path(ref_key).stem if ref_key else 'no_ref'}"
+user_audio = st.audio_input("Record your attempt here:", key=recorder_key)
+
+if user_audio and not st.session_state.mimic_submitted:
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_audio:
+        tmp_audio.write(user_audio.read())
+        user_audio_path = tmp_audio.name
+    if Path(user_audio_path).exists() and Path(user_audio_path).stat().st_size > 0:
+        relative_ref_key = "/".join(ref_key.split("/")[1:])
+        if relative_ref_key in bird_embeddings:
+            ref_embedding = bird_embeddings[relative_ref_key]
+            user_embedding = compute_embedding(user_audio_path)
+            if user_embedding.size > 0:
+                similarity = cosine_similarity(ref_embedding, user_embedding)
+                score = int((similarity + 1) / 2 * 100)
+                st.session_state.mimic_submitted = True
+                st.metric("Similarity Score:", f"{score}%")
+                with st.spinner("Visualizing your call..."):
+                    reducer, species_df_umap = get_reducer(species)
+                    if reducer and not species_df_umap.empty:
+                        umap_df = run_umap(reducer, species_df_umap, user_embedding)
+                        if not umap_df.empty:
+                            fig = px.scatter_3d(umap_df, x="umap_x", y="umap_y", z="umap_z", color="type", hover_name="file", color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"})
+                            st.plotly_chart(fig, use_container_width=True)
+                            st.caption("Your call is orange; real bird calls are green.")
+        else:
+            st.error(f"Reference embedding for {relative_ref_key} not found.")
+    Path(user_audio_path).unlink(missing_ok=True)
+
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("🦉 Try a new bird"):
+        st.session_state.previous_species.append(species)
+        st.session_state.previous_species = st.session_state.previous_species[-3:]
+        candidates = [s for s in all_species if s not in st.session_state.previous_species]
+        st.session_state.current_species = random.choice(candidates or all_species)
+        st.session_state.selected_key = None
+        st.session_state.mimic_submitted = False
+        if recorder_key in st.session_state:
+            st.session_state.pop(recorder_key)
+        st.rerun()
+
+with col2:
+    if st.session_state.mimic_submitted:
+        if st.button("🎶 Try this species again"):
+            st.session_state.selected_key = random.choice(valid_audio_keys)
+            st.session_state.mimic_submitted = False
+            if recorder_key in st.session_state:
+                st.session_state.pop(recorder_key)
+            st.rerun()
+    else:
+        st.button("🎶 Try this species again", disabled=True)

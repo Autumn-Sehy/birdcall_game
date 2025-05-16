@@ -320,7 +320,7 @@ with col1:
         st.session_state.mimic_submitted = False
         if recorder_key in st.session_state:
             del st.session_state[recorder_key]
-        st.experimental_rerun()
+        st.rerun()
 with col2:
     btn = st.button("🎶 Try this species again", disabled=not st.session_state.mimic_submitted)
     if btn:
@@ -328,4 +328,4 @@ with col2:
         st.session_state.mimic_submitted = False
         if recorder_key in st.session_state:
             del st.session_state[recorder_key]
-        st.experimental_rerun()
+        st.rerun()

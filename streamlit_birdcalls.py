@@ -82,14 +82,14 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
-@st.cache_resource(show_spinner="Running from angry eagles...")
+@st.cache_resource(show_spinner="Loading Wav2Vec2 model...")
 def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
     processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
     model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h").to(device)
     model(torch.zeros(1, 16000, device=device))
     return processor, model
 
-@st.cache_data(show_spinner="Fetching hummingbird feed...")
+@st.cache_data(show_spinner="Fetching pre-computed embeddings...")
 def load_all_embeddings() -> Dict[str, np.ndarray]:
     embeddings_key = "all_embeddings.pt"
     try:
@@ -260,25 +260,24 @@ if user_audio and not st.session_state.mimic_submitted:
         relative_ref_key = "/".join(ref_key.split("/")[1:])
         if relative_ref_key in bird_embeddings:
             ref_embedding = bird_embeddings[relative_ref_key]
-            with st.spinner("Catching birds to compare call similarity..."):
-                user_embedding = compute_embedding(user_audio_path)
-                if user_embedding.size > 0:
-                    similarity = cosine_similarity(ref_embedding, user_embedding)
-                    if similarity > 0.7:
-                        score = int((similarity - 0.7) / 0.3 * 100)
-                        score = max(0, min(100, score))
-                    else:
-                        score = 0
-                    st.session_state.mimic_submitted = True
-                    st.metric("Similarity Score:", f"{score}%")
-                    with st.spinner("Stacking your call up against a bird's..."):
-                        reducer, species_df_umap = get_reducer(species)
-                        if reducer and not species_df_umap.empty:
-                            umap_df = run_umap(reducer, species_df_umap, user_embedding)
-                            if not umap_df.empty:
-                                fig = px.scatter_3d(umap_df, color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"})
-                                st.plotly_chart(fig, use_container_width=True)
-                                st.caption(f"Your call is orange, {species} calls are green.")
+            user_embedding = compute_embedding(user_audio_path)
+            if user_embedding.size > 0:
+                similarity = cosine_similarity(ref_embedding, user_embedding)
+                if similarity > 0.7:
+                    score = int((similarity - 0.7) / 0.3 * 100)
+                    score = max(0, min(100, score))
+                else:
+                    score = 0
+                st.session_state.mimic_submitted = True
+                st.metric("Similarity Score:", f"{score}%")
+                with st.spinner("Visualizing your call..."):
+                    reducer, species_df_umap = get_reducer(species)
+                    if reducer and not species_df_umap.empty:
+                        umap_df = run_umap(reducer, species_df_umap, user_embedding)
+                        if not umap_df.empty:
+                            fig = px.scatter_3d(umap_df, color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"})
+                            st.plotly_chart(fig, use_container_width=True)
+                            st.caption("Your call is orange; real bird calls are green.")
         else:
             st.error(f"Reference embedding for {relative_ref_key} not found.")
     Path(user_audio_path).unlink(missing_ok=True)

@@ -1,3 +1,12 @@
+"""Bird Call Mimic Game
+------------------------------------------------
+This Streamlit app lets users practise bird calls. For each round it:
+1. Chooses a random bird species from 10 options
+2. I chose the bird species due to their funky calls, knowledge I have from guiding at Glacier National Park
+3. Plays a short reference clip
+4. Lets the user record their own attempt.
+5. Computes Wav2Vec2 embeddings, cosine similarity (for the score) & a 3-D UMAP visualisation.
+"""
 import io
 import random
 import tempfile
@@ -18,10 +27,10 @@ from umap import UMAP
 
 from config import species_to_scrape
 
-SHARE_THUMBNAIL_URL = f"https://{st.secrets.get('S3_BUCKET')}.s3.amazonaws.com/share_photo.jpg"
+# Page config
 st.set_page_config(
     page_title="Are you good at making bird calls?",
-    page_icon=SHARE_THUMBNAIL_URL,
+    page_icon="🪶",
     layout="wide",
 )
 
@@ -230,7 +239,7 @@ if not s3_keys_for_species:
 # Fetch durations with spinner for user feedback
 valid_audio_keys: List[str] = []
 audio_durations: Dict[str, float] = {}
-with st.spinner("Running from angry eagles..."):
+with st.spinner("Fetching audio durations..."):
     for key in s3_keys_for_species:
         path = download_to_temp(key)
         try:

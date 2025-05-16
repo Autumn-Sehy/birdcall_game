@@ -115,7 +115,7 @@ def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
     return processor, model
 
 
-@st.cache_data(show_spinner="Fetching embeddings...")
+@st.cache_data(show_spinner="Sneaking up on birds...")
 def load_all_embeddings() -> dict[str, np.ndarray]:
     obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="all_embeddings.pt")  # updated key
     buf = io.BytesIO(obj["Body"].read())

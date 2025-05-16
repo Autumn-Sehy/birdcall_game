@@ -2,7 +2,7 @@
 ------------------------------------------------
 This Streamlit app lets users practise bird calls. For each round it:
 1. Chooses a random bird species (from `config.species_to_scrape`).
-2.I chose the bird species due to their funky calls, knowledge I have from guiding at Glacier National Park
+2. I chose the bird species due to their funky calls, knowledge I have from guiding at Glacier National Park
 2. Plays a short reference clip
 3. Lets the user record their own attempt.
 4. Computes Wav2Vec2 embeddings, cosine similarity (for the score) & a 3-D UMAP visualisation.
@@ -34,11 +34,14 @@ DEFAULT_BUCKET = "bird-database"
 @st.cache_resource(show_spinner="Connecting to S3...")
 def get_s3_client():
     try:
-        return boto3.client(
-            "s3",
+        session = boto3.Session(
             aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
             aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"],
             region_name=st.secrets.get("AWS_REGION", "us-east-1"),
+        )
+        return session.client(
+            "s3",
+            config=boto3.session.Config(signature_version="s3v4"),
         )
     except Exception as e:
         st.error(f"S3 Connection Error: {e}")
@@ -123,8 +126,10 @@ def get_species_df(species: str) -> pd.DataFrame:
     s3_keys = []
     temp_files = []
     for key in s3_audio_keys:
-        emb = bird_embeddings.get(key)
+        relative_key = "/".join(key.split("/")[1:])  # Remove the "Data/" prefix
+        emb = bird_embeddings.get(relative_key)
         if emb is None:
+            st.warning(f"Embedding NOT found for key: {key} (relative: {relative_key})")
             local_path = download_to_temp(key)
             temp_files.append(local_path)
             emb = compute_embedding(local_path)
@@ -230,9 +235,6 @@ if st.session_state.selected_key not in valid_audio_keys or st.session_state.sel
 ref_key = st.session_state.selected_key
 ref_audio_url = presigned_url(ref_key)
 
-st.info(f"Generated audio URL: {ref_audio_url}")  # CRITICAL: Log the URL
-st.write(f"Selected Key: {ref_key}") # Debug: Check the selected key
-
 if ref_audio_url:
     st.audio(ref_audio_url)  # Basic usage, let Streamlit infer format
 else:
@@ -249,8 +251,9 @@ if user_audio and not st.session_state.mimic_submitted:
         tmp_audio.write(user_audio.read())
         user_audio_path = tmp_audio.name
     if Path(user_audio_path).exists() and Path(user_audio_path).stat().st_size > 0:
-        if ref_key in bird_embeddings:
-            ref_embedding = bird_embeddings[ref_key]
+        relative_ref_key = "/".join(ref_key.split("/")[1:])
+        if relative_ref_key in bird_embeddings:
+            ref_embedding = bird_embeddings[relative_ref_key]
             user_embedding = compute_embedding(user_audio_path)
             if user_embedding.size > 0:
                 similarity = cosine_similarity(ref_embedding, user_embedding)
@@ -266,7 +269,7 @@ if user_audio and not st.session_state.mimic_submitted:
                             st.plotly_chart(fig, use_container_width=True)
                             st.caption("Your call is orange; real bird calls are green.")
         else:
-            st.error(f"Reference embedding for {ref_key} not found.")
+            st.error(f"Reference embedding for {relative_ref_key} not found.")
     Path(user_audio_path).unlink(missing_ok=True)
 
 col1, col2 = st.columns(2)

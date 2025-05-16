@@ -1,5 +1,4 @@
-"""
-Bird Call Mimic Game
+"""Bird Call Mimic Game
 ------------------------------------------------
 This Streamlit app lets users practise bird calls. For each round it:
 1. Chooses a random bird species (from `config.species_to_scrape`).
@@ -8,7 +7,6 @@ This Streamlit app lets users practise bird calls. For each round it:
 3. Lets the user record their own attempt.
 4. Computes Wav2Vec2 embeddings, cosine similarity (for the score) & a 3-D UMAP visualisation.
 """
-
 import io
 import random
 import tempfile
@@ -83,14 +81,14 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
-@st.cache_resource(show_spinner="Running from angry eagles...")
+@st.cache_resource(show_spinner="Loading Wav2Vec2 model...")
 def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
     processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
     model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h").to(device)
     model(torch.zeros(1, 16000, device=device))
     return processor, model
 
-@st.cache_data(show_spinner="Fetching hummingbird feed...")
+@st.cache_data(show_spinner="Fetching pre-computed embeddings...")
 def load_all_embeddings() -> Dict[str, np.ndarray]:
     embeddings_key = "all_embeddings.pt"
     try:
@@ -259,7 +257,12 @@ if user_audio and not st.session_state.mimic_submitted:
             user_embedding = compute_embedding(user_audio_path)
             if user_embedding.size > 0:
                 similarity = cosine_similarity(ref_embedding, user_embedding)
-                score = int((similarity + 1) / 2 * 100)
+                # Adjusted scoring logic:
+                if similarity > 0.7:  # Experiment with this threshold
+                    score = int((similarity - 0.7) / 0.3 * 100)  # Adjust scaling
+                    score = max(0, min(100, score))
+                else:
+                    score = 0
                 st.session_state.mimic_submitted = True
                 st.metric("Similarity Score:", f"{score}%")
                 with st.spinner("Visualizing your call..."):

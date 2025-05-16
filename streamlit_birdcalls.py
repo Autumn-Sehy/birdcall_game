@@ -58,7 +58,6 @@ DEFAULT_BUCKET = "bird-database"
 
 @st.cache_resource(show_spinner="Connecting to S3...")
 def get_s3_client():
-    """Initialise boto3 client once per session."""
     return boto3.client(
         "s3",
         aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
@@ -71,7 +70,6 @@ CLIENT = get_s3_client()
 
 
 def list_audio_keys(species: str) -> list[str]:
-    """Return all object keys for the given species folder (mp3/wav only)."""
     paginator = CLIENT.get_paginator("list_objects_v2")
     keys = []
     for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"Data/{species}/"):
@@ -83,7 +81,6 @@ def list_audio_keys(species: str) -> list[str]:
 
 
 def presigned_url(key: str, expires_sec: int = 3600) -> str:
-    """Generate a temporary, signed URL for public playback of an S3 object."""
     return CLIENT.generate_presigned_url(
         "get_object",
         Params={"Bucket": S3_BUCKET, "Key": key},
@@ -92,7 +89,6 @@ def presigned_url(key: str, expires_sec: int = 3600) -> str:
 
 
 def download_to_temp(key: str) -> str:
-    """Download an S3 object to a NamedTemporaryFile and return its path."""
     suffix = Path(key).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         CLIENT.download_fileobj(S3_BUCKET, key, tmp)
@@ -107,20 +103,20 @@ if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
 
-@st.cache_resource(show_spinner="Fixing microphones...")
+@st.cache_resource(show_spinner="Loading Wav2Vec2...")
 def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
     processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
     model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h").to(device)
-    _ = model(torch.zeros(1, 16000, device=device))  # warm-up
+    _ = model(torch.zeros(1, 16000, device=device))
     return processor, model
 
 
-@st.cache_data(show_spinner="Sneaking up on birds...")
+@st.cache_data(show_spinner="Fetching embeddings...")
 def load_all_embeddings() -> dict[str, np.ndarray]:
-    obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="all_embeddings.pt")  # updated key
+    obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="all_embeddings.pt")
     buf = io.BytesIO(obj["Body"].read())
     embeddings = torch.load(buf, map_location="cpu")
-    return {k: v.numpy() for k, v in embeddings.items()}  # convert tensors to NumPy
+    return {k: v.numpy() for k, v in embeddings.items()}
 
 
 
@@ -206,7 +202,6 @@ def run_umap(reducer: UMAP, species_df: pd.DataFrame, user_emb: np.ndarray) -> p
 # Loading message at the start
 # -------------------------------------------------------------------------
 with st.spinner("Fetching birds and recording calls in the field, please wait a minute or so to load..."):
-
     all_species = [s for s in species_to_scrape if s != "Eastern Cattle Eagret"]
 
     if "current_species" not in st.session_state:
@@ -247,7 +242,6 @@ for key in keys:
         continue
 
 if not valid_keys:
-    # fall back to the shortest clip if none are <= 20 s
     if durations:
         valid_keys = [min(durations, key=durations.get)]
     else:

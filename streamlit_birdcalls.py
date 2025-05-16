@@ -7,7 +7,6 @@ This Streamlit app lets users practise bird calls. For each round it:
 3. Lets the user record their own attempt.
 4. Computes Wav2Vec2 embeddings, cosine similarity (for the score) & a 3-D UMAP visualisation.
 """
-
 import io
 import random
 import tempfile
@@ -23,7 +22,7 @@ import torch
 import torchaudio
 from librosa import get_duration
 from torchaudio.functional import resample
-from transformers import Wav2Vec2Model, Wav2Vec2Processor
+from transformers.models.wav2vec2 import Wav2Vec2Model, Wav2Vec2Processor
 from umap import UMAP
 
 from config import species_to_scrape

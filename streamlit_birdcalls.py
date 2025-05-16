@@ -208,7 +208,7 @@ recorder_key = f"mimic_{species}_{Path(ref_key).stem}"
 try:
     mimic = st.audio_input("Record your attempt here (≤10 s)", key=recorder_key, max_duration=10)
 except TypeError:
-    mimic = st.audio_input("Record your attempt here", key=recorder_key))", key=recorder_key, max_duration=10)
+    mimic = st.audio_input("Record your attempt here", key=recorder_key)", key=recorder_key, max_duration=10)
 
 if mimic and not ss.mimic_submitted:
     mimic.seek(0)

@@ -1,11 +1,11 @@
-# Bird-Call Mimic Game — clean ″start-over″ version
+# Bird‑Call Mimic Game — clean ″start‑over″ version
 # =================================================
 # • Uses **Data/<species>/…** prefix to mirror your S3 layout
-# • Keys inside `all_embeddings.pt` are mapped to **base-filename only**
+# • Keys inside `all_embeddings.pt` are mapped to **base‑filename only**
 #   so we don’t care whether they came from local `species/` or S3 `Data/…`
 # • Adds missing `seek(0)` on the recorder widget and a length check so
 #   we fail loud if the browser captured 0 bytes.
-# • Down-mix stereo→mono + resample to 16 kHz before Wav2Vec2.
+# • Down‑mix stereo→mono + resample to 16 kHz before Wav2Vec2.
 # • Keeps everything else exactly like your original local build.
 # ─────────────────────────────────────────────────────────────────────
 
@@ -46,7 +46,7 @@ CLIENT = get_s3_client()
 
 
 def list_audio_keys(species: str) -> List[str]:
-    """Return S3 keys like `Data/<species>/file.mp3`."""
+    """Return S3 keys like `Data/<species>/file.mp3`."""
     paginator = CLIENT.get_paginator("list_objects_v2")
     keys: List[str] = []
     for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"Data/{species}/"):
@@ -92,7 +92,7 @@ def load_all_embeddings() -> Dict[str, np.ndarray]:
     obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="all_embeddings.pt")
     buf = io.BytesIO(obj["Body"].read())
     raw: Dict[str, torch.Tensor] = torch.load(buf, map_location="cpu")
-    # map <whatever>/foo.wav  →  foo.wav
+    # map <whatever>/foo.wav  →  foo.wav
     return {_canonical(k): v.numpy() for k, v in raw.items()}
 
 bird_embeddings = load_all_embeddings()
@@ -204,13 +204,17 @@ st.audio(presigned_url(ref_key), format="audio/mpeg")
 # --------------------------------------------------------------------
 st.divider(); st.header(f"Try to mimic the {species}!")
 recorder_key = f"mimic_{species}_{Path(ref_key).stem}"
-mimic = st.audio_input("Record your attempt here (≤10 s)", key=recorder_key, max_duration=10)
+# Streamlit < 1.30 has no max_duration; attempt it, then fall back
+try:
+    mimic = st.audio_input("Record your attempt here (≤10 s)", key=recorder_key, max_duration=10)
+except TypeError:
+    mimic = st.audio_input("Record your attempt here", key=recorder_key))", key=recorder_key, max_duration=10)
 
 if mimic and not ss.mimic_submitted:
     mimic.seek(0)
     raw = mimic.read()
     if not raw:
-        st.error("⚠️ Browser recorded 0 bytes. Try again or a different browser.")
+        st.error("⚠️ Browser recorded 0 bytes. Try again or a different browser.")
         st.stop()
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(raw); user_path = tmp.name

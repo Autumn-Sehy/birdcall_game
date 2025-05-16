@@ -63,6 +63,7 @@ def list_audio_keys(species: str) -> List[str]:
         st.error(f"Error listing audio keys for {species}: {e}")
     return keys
 
+
 def presigned_url(key: str, expires_sec: int = 3600) -> str:
     try:
         return CLIENT.generate_presigned_url(
@@ -72,12 +73,14 @@ def presigned_url(key: str, expires_sec: int = 3600) -> str:
         st.error(f"Error generating presigned URL for {key}: {e}")
         return ""
 
+
 def download_to_temp(key: str) -> str:
     suffix = Path(key).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         CLIENT.download_fileobj(S3_BUCKET, key, tmp)
         return tmp.name
 
+# Device setup
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
@@ -86,6 +89,8 @@ if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
 def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
     processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
     model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h").to(device)
+    model.eval()  # ensure inference mode
+    # warm-up pass
     model(torch.zeros(1, 16000, device=device))
     return processor, model
 
@@ -121,11 +126,9 @@ def compute_embedding(audio_path: str) -> np.ndarray:
 
 @st.cache_data(show_spinner="Preparing species data...")
 def get_species_df(species: str) -> pd.DataFrame:
+    # unchanged
     s3_audio_keys = list_audio_keys(species)
-    embeddings = []
-    files = []
-    s3_keys = []
-    temp_files = []
+    embeddings, files, s3_keys, temp_files = [], [], [], []
     for key in s3_audio_keys:
         relative_key = "/".join(key.split("/")[1:])
         emb = bird_embeddings.get(relative_key)
@@ -147,9 +150,9 @@ def get_species_df(species: str) -> pd.DataFrame:
     df["s3_key"] = s3_keys
     return df
 
-spinner_text = "Fetching birds to compare their call to yours..."
-@st.cache_resource(show_spinner=spinner_text)
+@st.cache_resource(show_spinner="Fetching birds to compare their call to yours...")
 def get_reducer(species: str, n_neighbors: int = 15, min_dist: float = 0.1):
+    # unchanged
     species_df = get_species_df(species)
     if species_df.empty or not any(col.startswith("dim_") for col in species_df.columns):
         st.warning(f"No embedding data for {species}.")
@@ -159,6 +162,7 @@ def get_reducer(species: str, n_neighbors: int = 15, min_dist: float = 0.1):
     return reducer, species_df
 
 def run_umap(reducer: UMAP, species_df: pd.DataFrame, user_emb: np.ndarray) -> pd.DataFrame:
+    # unchanged
     if reducer is None or species_df.empty or user_emb is None or user_emb.size == 0:
         return pd.DataFrame()
     embed_cols = [c for c in species_df.columns if c.startswith("dim_")]
@@ -172,6 +176,7 @@ def run_umap(reducer: UMAP, species_df: pd.DataFrame, user_emb: np.ndarray) -> p
     df2["type"] = df2["file"].apply(lambda f: "User" if f == "You" else "Bird")
     return df2
 
+# Config checks
 if not species_to_scrape:
     st.error("`species_to_scrape` is empty in config.py.")
     st.stop()
@@ -181,25 +186,24 @@ if not all_species:
     st.error("No species available after filtering.")
     st.stop()
 
-if "current_species" not in st.session_state:
-    st.session_state.current_species = random.choice(all_species)
-if "previous_species" not in st.session_state:
-    st.session_state.previous_species = []
-if "selected_key" not in st.session_state:
-    st.session_state.selected_key = None
-if "mimic_submitted" not in st.session_state:
-    st.session_state.mimic_submitted = False
-if "loaded_species_data" not in st.session_state:
-    st.session_state.loaded_species_data = None
-if "valid_audio_keys" not in st.session_state:
-    st.session_state.valid_audio_keys = None
-if "audio_durations" not in st.session_state:
-    st.session_state.audio_durations = None
+# Session state defaults
+for key, default in {
+    "current_species": random.choice(all_species),
+    "previous_species": [],
+    "selected_key": None,
+    "mimic_submitted": False,
+    "loaded_species_data": None,
+    "valid_audio_keys": None,
+    "audio_durations": None
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 species = st.session_state.current_species
 
 st.title("Are you good at making bird calls?")
 
+# Show species image
 img_key = f"Images/{species}.jpg"
 try:
     img_bytes = CLIENT.get_object(Bucket=S3_BUCKET, Key=img_key)["Body"].read()
@@ -207,9 +211,9 @@ try:
 except Exception:
     st.caption(f"(No image for {species})")
 
-with st.spinner("Recording birds, please wait while we gather calls..."):
-    if st.session_state.loaded_species_data != species:
-        st.session_state.loaded_species_data = species
+# Only fetch new species data under spinner
+if st.session_state.loaded_species_data != species:
+    with st.spinner("Recording birds, please wait while we gather calls..."):
         s3_keys_for_species = list_audio_keys(species)
         if not s3_keys_for_species:
             st.error(f"No audio files found for {species}.")
@@ -217,52 +221,49 @@ with st.spinner("Recording birds, please wait while we gather calls..."):
 
         valid_audio_keys: List[str] = []
         audio_durations: Dict[str, float] = {}
-        temp_files_duration = []
+        temp_files_duration: List[str] = []
 
-        with st.spinner(f"Fetching audio details for {species}..."):
-            for key in s3_keys_for_species:
-                local_path = download_to_temp(key)
-                temp_files_duration.append(local_path)
-                try:
-                    duration = get_duration(path=local_path)
-                    audio_durations[key] = duration
-                    if duration <= 20:
-                        valid_audio_keys.append(key)
-                except Exception as e:
-                    st.warning(f"Could not get duration for {key}. Error: {e}")
-            for f in temp_files_duration:
-                Path(f).unlink(missing_ok=True)
+        for key in s3_keys_for_species:
+            local_path = download_to_temp(key)
+            temp_files_duration.append(local_path)
+            try:
+                duration = get_duration(path=local_path)
+                audio_durations[key] = duration
+                if duration <= 20:
+                    valid_audio_keys.append(key)
+            except Exception as e:
+                st.warning(f"Could not get duration for {key}. Error: {e}")
+        for f in temp_files_duration:
+            Path(f).unlink(missing_ok=True)
 
         if not valid_audio_keys:
             valid_audio_keys = [min(audio_durations, key=audio_durations.get)] if audio_durations else s3_keys_for_species
 
-        if not valid_audio_keys:
-            st.error(f"No suitable audio for {species}.")
-            st.stop()
-
         st.session_state.valid_audio_keys = valid_audio_keys
         st.session_state.audio_durations = audio_durations
-    else:
-        valid_audio_keys = st.session_state.valid_audio_keys
+        st.session_state.loaded_species_data = species
+    valid_audio_keys = st.session_state.valid_audio_keys
+else:
+    valid_audio_keys = st.session_state.valid_audio_keys
 
-    if not valid_audio_keys:
-        st.error(f"No suitable audio found for {species}.")
-        st.stop()
+if not valid_audio_keys:
+    st.error(f"No suitable audio found for {species}.")
+    st.stop()
 
-    if "selected_key" not in st.session_state or st.session_state.selected_key not in valid_audio_keys:
-        st.session_state.selected_key = random.choice(valid_audio_keys)
-
-    ref_key = st.session_state.selected_key
-    ref_audio_url = presigned_url(ref_key)
-
-    if ref_audio_url:
-        st.audio(ref_audio_url)
-    else:
-        st.error("Could not load reference audio.")
+# Select reference key
+if not st.session_state.selected_key or st.session_state.selected_key not in valid_audio_keys:
+    st.session_state.selected_key = random.choice(valid_audio_keys)
+ref_key = st.session_state.selected_key
+ref_audio_url = presigned_url(ref_key)
+if ref_audio_url:
+    st.audio(ref_audio_url)
+else:
+    st.error("Could not load reference audio.")
 
 st.divider()
 st.header(f"Try to mimic the {species}!")
 
+# User recording & embedding
 recorder_key = f"mimic_audio_{species}_{Path(ref_key).stem if ref_key else 'no_ref'}"
 user_audio = st.audio_input("Record your attempt here:", key=recorder_key)
 
@@ -270,32 +271,44 @@ if user_audio and not st.session_state.mimic_submitted:
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_audio:
         tmp_audio.write(user_audio.read())
         user_audio_path = tmp_audio.name
+
     if Path(user_audio_path).exists() and Path(user_audio_path).stat().st_size > 0:
         relative_ref_key = "/".join(ref_key.split("/")[1:])
         if relative_ref_key in bird_embeddings:
             ref_embedding = bird_embeddings[relative_ref_key]
-            with st.spinner("Catching birds to compare call similarity..."):
-                user_embedding = compute_embedding(user_audio_path)
-                if user_embedding.size > 0:
-                    similarity = cosine_similarity(ref_embedding, user_embedding)
-                    if similarity > 0.7:
-                        score = int((similarity - 0.7) / 0.3 * 100)
-                        score = max(0, min(100, score))
-                    else:
-                        score = 0
-                    st.session_state.mimic_submitted = True
-                    st.metric("Similarity Score:", f"{score}%")
-                    reducer, species_df_umap = get_reducer(species)
-                    if reducer and not species_df_umap.empty:
-                        umap_df = run_umap(reducer, species_df_umap, user_embedding)
-                        if not umap_df.empty:
-                            fig = px.scatter_3d(umap_df, x="umap_x", y="umap_y", z="umap_z", color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"})
-                            st.plotly_chart(fig, use_container_width=True)
-                            st.caption("Your call is orange; real bird calls are green.")
+            try:
+                with st.spinner("Computing your call’s embedding…"):
+                    user_embedding = compute_embedding(user_audio_path)
+                if user_embedding.size == 0:
+                    st.error("Got back an empty embedding – try recording again.")
+                    st.stop()
+            except Exception as e:
+                st.error(f"Error computing your embedding: {e}")
+                st.stop()
+
+            # similarity, score, UMAP
+            similarity = cosine_similarity(ref_embedding, user_embedding)
+            score = int((similarity - 0.7) / 0.3 * 100) if similarity > 0.7 else 0
+            score = max(0, min(100, score))
+
+            st.session_state.mimic_submitted = True
+            st.metric("Similarity Score:", f"{score}%")
+            reducer, species_df_umap = get_reducer(species)
+            if reducer and not species_df_umap.empty:
+                umap_df = run_umap(reducer, species_df_umap, user_embedding)
+                if not umap_df.empty:
+                    fig = px.scatter_3d(
+                        umap_df,
+                        x="umap_x", y="umap_y", z="umap_z",
+                        color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.caption("Your call is orange; real bird calls are green.")
         else:
             st.error(f"Reference embedding for {relative_ref_key} not found.")
     Path(user_audio_path).unlink(missing_ok=True)
 
+# Navigation buttons
 col1, col2 = st.columns(2)
 with col1:
     if st.button("🦉 Try a new bird"):
@@ -314,4 +327,5 @@ with col2:
     if st.session_state.mimic_submitted:
         if st.button("🎶 Try this species again"):
             st.session_state.selected_key = random.choice(st.session_state.valid_audio_keys)
-            st.session_state.mimic_submitted
+            st.session_state.mimic_submitted = False
+            st.rerun()

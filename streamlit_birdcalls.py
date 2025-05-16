@@ -28,12 +28,13 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------------------
-# Imports - standard -> third-party -> local
+# Imports
 # -------------------------------------------------------------------------
 import io
 import os
 import random
 import tempfile
+import time
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -51,7 +52,7 @@ from umap import UMAP
 from config import species_to_scrape
 
 # -------------------------------------------------------------------------
-# AWS / S3 helpers
+# AWS / S3
 # -------------------------------------------------------------------------
 
 DEFAULT_BUCKET = "bird-database"
@@ -69,7 +70,7 @@ S3_BUCKET = st.secrets.get("S3_BUCKET", DEFAULT_BUCKET)
 CLIENT = get_s3_client()
 
 
-def list_audio_keys(species: str) -> list[str]:
+def list_audio_files(species: str) -> list[str]:
     paginator = CLIENT.get_paginator("list_objects_v2")
     keys = []
     for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"Data/{species}/"):
@@ -103,16 +104,15 @@ if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
 
-@st.cache_resource(show_spinner="Loading Wav2Vec2...")
-def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
+@st.cache_resource
+def init_model():
     processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
     model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h").to(device)
-    _ = model(torch.zeros(1, 16000, device=device))
     return processor, model
 
 
-@st.cache_data(show_spinner="Fetching embeddings...")
-def load_all_embeddings() -> dict[str, np.ndarray]:
+@st.cache_data
+def load_all_embeddings():
     obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="all_embeddings.pt")
     buf = io.BytesIO(obj["Body"].read())
     embeddings = torch.load(buf, map_location="cpu")
@@ -128,9 +128,13 @@ bird_embeddings = load_all_embeddings()
 # -------------------------------------------------------------------------
 
 def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
-    dot = float(np.dot(v1, v2))
-    denom = np.linalg.norm(v1) * np.linalg.norm(v2)
-    return 0.0 if denom == 0 else dot / denom
+    dot = np.dot(v1, v2)
+    norm_vec1 = np.linalg.norm(v1)
+    norm_vec2 = np.linalg.norm(v2)
+    if norm_vec1 == 0 or norm_vec2 == 0:
+        return 0
+    else:
+        return dot / (norm_vec1 * norm_vec2)
 
 
 @torch.inference_mode()
@@ -150,7 +154,7 @@ def compute_embedding(audio_path: str) -> np.ndarray:
 # -------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def get_species_df(species: str) -> pd.DataFrame:
-    keys = list_audio_keys(species)
+    keys = list_audio_files(species)
     embs = []
     files = []
     for key in keys:
@@ -167,34 +171,17 @@ def get_species_df(species: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_resource(show_spinner=False)
-def get_reducer(species: str, n_neighbors: int = 15, min_dist: float = 0.1):
-    species_df = get_species_df(species)
-    embed_cols = [c for c in species_df.columns if c.startswith("dim_")]
-    reducer = UMAP(n_components=3, n_neighbors=n_neighbors, min_dist=min_dist, random_state=42).fit(
-        species_df[embed_cols].values
-    )
-    return reducer, species_df
-
-
-def run_umap(reducer: UMAP, species_df: pd.DataFrame, user_emb: np.ndarray) -> pd.DataFrame:
-    embed_cols = [c for c in species_df.columns if c.startswith("dim_")]
-    coords_bird = reducer.embedding_
-    coords_user = reducer.transform(user_emb.reshape(1, -1))
-
-    df2 = species_df.copy()
-    df2[["umap_x", "umap_y", "umap_z"]] = coords_bird
-
-    user_row = dict(zip(embed_cols, user_emb))
-    user_row.update(
-        {
-            "file": "You",
-            "umap_x": float(coords_user[0, 0]),
-            "umap_y": float(coords_user[0, 1]),
-            "umap_z": float(coords_user[0, 2]),
-        }
-    )
-    df2 = pd.concat([df2, pd.DataFrame([user_row])], ignore_index=True)
+def run_umap(df: pd.DataFrame, user_emb: np.ndarray,
+             n_neighbors: int = 15, min_dist: float = 0.1) -> pd.DataFrame:
+    embed_cols = [c for c in df.columns if c.startswith("dim_")]
+    df_user = pd.DataFrame(user_emb.reshape(1, -1), columns=embed_cols)
+    df_user["file"] = ["You"]
+    df = pd.concat([df, df_user], ignore_index=True)
+    reducer = UMAP(n_components=3, n_neighbors=n_neighbors,
+                   min_dist=min_dist, random_state=42)
+    coords = reducer.fit_transform(df[embed_cols].values)
+    df2 = df.copy()
+    df2["umap_x"], df2["umap_y"], df2["umap_z"] = coords[:, 0], coords[:, 1], coords[:, 2]
     df2["type"] = df2["file"].apply(lambda f: "User" if f == "You" else "Bird")
     return df2
 
@@ -228,27 +215,27 @@ except Exception:
     st.write("(no image available for this species)")
 
 # Choose a reference clip
-keys = list_audio_keys(species)
-valid_keys = []
+audio_files = list_audio_files(species)
+valid_files = []
 durations = {}
-for key in keys:
+for key in audio_files:
     try:
         tmp = download_to_temp(key)
         d = get_duration(path=tmp)
         durations[key] = d
         if d <= 20:
-            valid_keys.append(key)
+            valid_files.append(key)
     except Exception:
         continue
 
-if not valid_keys:
+if not valid_files:
     if durations:
-        valid_keys = [min(durations, key=durations.get)]
+        valid_files = [min(durations, key=durations.get)]
     else:
-        valid_keys = keys
+        valid_files = audio_files
 
-if st.session_state.selected_key not in valid_keys:
-    st.session_state.selected_key = random.choice(valid_keys)
+if st.session_state.selected_key not in valid_files:
+    st.session_state.selected_key = random.choice(valid_files)
 
 ref_key = st.session_state.selected_key
 st.audio(presigned_url(ref_key), format="audio/mpeg")
@@ -267,26 +254,37 @@ if mimic and not st.session_state.mimic_submitted:
         tmp.write(mimic.read())
         user_path = tmp.name
 
-    ref_emb = bird_embeddings[ref_key]
+    rel_key = ref_key
+    species_emb = bird_embeddings.get(rel_key)
     user_emb = compute_embedding(user_path)
-    sim = cosine_similarity(ref_emb, user_emb)
+    sim = cosine_similarity(species_emb, user_emb)
     score = int((sim + 1) / 2 * 100)
 
     st.session_state.mimic_submitted = True
 
-    st.metric("Similarity", f"{score}%")
+    st.divider()
+    col1, col2, col3 = st.columns(3)
+    with col2:
+        st.metric("Your call was this similar:", f"{score}%")
 
-    with st.spinner("Plotting your call among the bird's calls ..."):
-        reducer, species_df = get_reducer(species)
-        df_plot = run_umap(reducer, species_df, user_emb=user_emb)
+    st.divider()
+    progress_text = "Comparing your call to the bird database, this will take a moment..."
+    my_bar = st.progress(0, text=progress_text)
+    for percent_complete in range(120):
+        time.sleep(0.01)
+        my_bar.progress(percent_complete + 1, text=progress_text)
+        
+    df = get_species_df(species)
+    with st.spinner("Comparing your call with the bird's calls..."):
+        df_umap = run_umap(df, user_emb=user_emb)
         fig = px.scatter_3d(
-            df_plot,
-            color="type",
-            color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"},
+            df_umap,
+            x="umap_x", y="umap_y", z="umap_z",
+            color="type", hover_name="file",
+            color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"}
         )
         st.plotly_chart(fig, use_container_width=True)
-
-    st.caption("Your call is orange; real bird calls are green.")
+        st.caption("Your call ('You') is shown in orange. Bird calls are shown in olive.")
 
 # ---------------------------------------------------------------------
 # Navigation buttons to try again or do a new bird
@@ -296,11 +294,15 @@ col1, col2 = st.columns(2)
 with col1:
     if st.button("🦉 Try a new bird"):
         st.session_state.previous_species.append(species)
-        st.session_state.previous_species = st.session_state.previous_species[-3:]
+        if len(st.session_state.previous_species) > 3:
+            st.session_state.previous_species.pop(0)
 
-        candidates = [s for s in all_species if s not in st.session_state.previous_species]
-        st.session_state.current_species = random.choice(candidates or all_species)
+        candidates = [s for s in all_species if s != species and s not in st.session_state.previous_species]
+        if not candidates:
+            st.session_state.previous_species = []
+            candidates = [s for s in all_species if s != species]
 
+        st.session_state.current_species = random.choice(candidates)
         st.session_state.selected_key = None
         st.session_state.mimic_submitted = False
         st.session_state.pop(recorder_key, None)
@@ -309,7 +311,7 @@ with col1:
 with col2:
     if st.session_state.mimic_submitted:
         if st.button("🎶 Try the call again"):
-            st.session_state.selected_key = random.choice(valid_keys)
+            st.session_state.selected_key = random.choice(valid_files)
             st.session_state.mimic_submitted = False
             st.session_state.pop(recorder_key, None)
             st.rerun()

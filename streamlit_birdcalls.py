@@ -1,11 +1,11 @@
 """Bird Call Mimic Game
 ------------------------------------------------
 This Streamlit app lets users practise bird calls. For each round it:
-1. Chooses a random bird species (from `config.species_to_scrape`).
-2.I chose the bird species due to their funky calls, knowledge I have from guiding at Glacier National Park
-2. Plays a short reference clip
-3. Lets the user record their own attempt.
-4. Computes Wav2Vec2 embeddings, cosine similarity (for the score) & a 3-D UMAP visualisation.
+1. Chooses a random bird species from 10 options
+2. I chose the bird species due to their funky calls, knowledge I have from guiding at Glacier National Park
+3. Plays a short reference clip
+4. Lets the user record their own attempt.
+5. Computes Wav2Vec2 embeddings, cosine similarity (for the score) & a 3-D UMAP visualisation.
 """
 import io
 import random
@@ -127,7 +127,7 @@ def get_species_df(species: str) -> pd.DataFrame:
     s3_keys = []
     temp_files = []
     for key in s3_audio_keys:
-        relative_key = "/".join(key.split("/")[1:])  # Remove the "Data/" prefix
+        relative_key = "/".join(key.split("/")[1:])  
         emb = bird_embeddings.get(relative_key)
         if emb is None:
             st.warning(f"Embedding NOT found for key: {key} (relative: {relative_key})")
@@ -147,7 +147,8 @@ def get_species_df(species: str) -> pd.DataFrame:
     df["s3_key"] = s3_keys
     return df
 
-@st.cache_resource(show_spinner=f"Fetching {species} birds to compare their call to yours...")
+spinner_text = f"Fetching {species} birds to compare their call to yours...")
+@st.cache_resource(show_spinner=spinner_text)
 def get_reducer(species: str, n_neighbors: int = 15, min_dist: float = 0.1):
     species_df = get_species_df(species)
     if species_df.empty or not any(col.startswith("dim_") for col in species_df.columns):

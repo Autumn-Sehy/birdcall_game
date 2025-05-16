@@ -230,9 +230,11 @@ if st.session_state.selected_key not in valid_audio_keys or st.session_state.sel
 ref_key = st.session_state.selected_key
 ref_audio_url = presigned_url(ref_key)
 
+st.info(f"Generated audio URL: {ref_audio_url}")  # CRITICAL: Log the URL
+st.write(f"Selected Key: {ref_key}") # Debug: Check the selected key
+
 if ref_audio_url:
-    audio_format = Path(ref_key).suffix.lower()
-    st.audio(ref_audio_url, format=f"audio/{audio_format[1:]}")
+    st.audio(ref_audio_url)  # Basic usage, let Streamlit infer format
 else:
     st.error("Could not load reference audio.")
 

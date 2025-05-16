@@ -147,7 +147,7 @@ def get_species_df(species: str) -> pd.DataFrame:
     df["s3_key"] = s3_keys
     return df
 
-@st.cache_resource(show_spinner="Fitting UMAP reducer...")
+@st.cache_resource(show_spinner=f"Fetching {species} birds to compare their call to yours...")
 def get_reducer(species: str, n_neighbors: int = 15, min_dist: float = 0.1):
     species_df = get_species_df(species)
     if species_df.empty or not any(col.startswith("dim_") for col in species_df.columns):

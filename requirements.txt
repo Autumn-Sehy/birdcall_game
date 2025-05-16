@@ -1,37 +1,37 @@
 # Core libraries
-streamlit
-torch
-torchaudio
-transformers[sentencepiece]
+streamlit==1.30.0  # A widely stable version
+torch==2.0.1        # Stable version known to work well
+torchaudio==2.0.2   # Corresponding stable torchaudio
+transformers[sentencepiece]==4.30.2 # Specific version with sentencepiece
 
 # Audio + ML
-librosa
-soundfile
-numba
-tqdm
-scikit-learn
-umap-learn
+librosa==0.10.1     # Recent stable version
+soundfile==0.12.1   # Recent stable version
+numba==0.57.0       # Stable version
+tqdm==4.66.1        # Recent stable version
+scikit-learn==1.3.2  # Recent stable version
+umap-learn==0.5.3   # Stable version
 
 # AWS
-boto3
-botocore
+boto3==1.28.73      # Recent stable version
+botocore==1.31.73   # Corresponding stable version
 
 # Data & Viz
-pandas
-numpy
-plotly
+pandas==2.1.1       # Recent stable version
+numpy==1.26.1       # Recent stable version
+plotly==5.17.0      # Recent stable version
 
 # Utilities
-requests
-python-dateutil
-typing-extensions
-pillow
-tornado
+requests==2.31.0    # Recent stable version
+python-dateutil==2.8.1 # Stable version
+typing-extensions==4.8.0 # Recent stable version
+pillow==10.1.0      # Recent stable version
+tornado==6.3.3       # Recent stable version
 
 # Helpful extras
-tenacity
-watchdog
-markdown-it-py
-pygments
-rich
-filelock
+tenacity==8.1.0      # Stable version
+watchdog==3.0.0      # Recent stable version
+markdown-it-py==3.0.0 # As specified
+pygments==2.16.1     # Recent stable version
+rich==13.6.0        # Recent stable version
+filelock==3.13.1     # Recent stable version

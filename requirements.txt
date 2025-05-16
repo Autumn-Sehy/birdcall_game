@@ -1,10 +1,37 @@
+# Core libraries
 streamlit
-boto3
-numpy
-pandas
 torch
 torchaudio
+transformers[sentencepiece]
+
+# Audio + ML
 librosa
-transformers
+soundfile
+numba
+tqdm
+scikit-learn
 umap-learn
+
+# AWS
+boto3
+botocore
+
+# Data & Viz
+pandas
+numpy
 plotly
+
+# Utilities
+requests
+python-dateutil
+typing-extensions
+pillow
+tornado
+
+# Helpful extras
+tenacity
+watchdog
+markdown-it-py
+pygments
+rich
+filelock

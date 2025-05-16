@@ -59,49 +59,26 @@ DEFAULT_BUCKET = "bird-database"
 
 @st.cache_resource(show_spinner="Connecting to S3...")
 def get_s3_client():
-    st.write("Initializing S3 client...")
-    try:
-        client = boto3.client(
-            "s3",
-            aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
-            aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"],
-            region_name=st.secrets.get("AWS_REGION", "us-east-1"),
-        )
-        
-        # Test connection
-        response = client.list_buckets()
-        st.write(f"Successfully connected to S3. Found {len(response['Buckets'])} buckets.")
-        for bucket in response['Buckets']:
-            st.write(f"Bucket: {bucket['Name']}")
-        
-        return client
-    except Exception as e:
-        st.error(f"Error connecting to S3: {str(e)}")
-        raise
+    return boto3.client(
+        "s3",
+        aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"],
+        region_name=st.secrets.get("AWS_REGION", "us-east-1"),
+    )
 
 S3_BUCKET = st.secrets.get("S3_BUCKET", DEFAULT_BUCKET)
-st.write(f"Using S3 bucket: {S3_BUCKET}")
 CLIENT = get_s3_client()
 
 
 def list_audio_files(species: str) -> list[str]:
-    st.write(f"Listing audio files for species: {species}")
-    st.write(f"Looking in path: Data/{species}/")
     paginator = CLIENT.get_paginator("list_objects_v2")
     keys = []
-    try:
-        for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"Data/{species}/"):
-            st.write(f"Found page with {len(page.get('Contents', []))} objects")
-            for obj in page.get("Contents", []):
-                key = obj["Key"]
-                st.write(f"Found object: {key}")
-                if key.lower().endswith((".mp3", ".wav")):
-                    keys.append(key)
-                    st.write(f"Added to audio keys: {key}")
-        return keys
-    except Exception as e:
-        st.error(f"Error listing objects: {str(e)}")
-        return []
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"Data/{species}/"):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if key.lower().endswith((".mp3", ".wav")):
+                keys.append(key)
+    return keys
 
 
 def presigned_url(key: str, expires_sec: int = 3600) -> str:
@@ -238,52 +215,31 @@ except Exception:
     st.write("(no image available for this species)")
 
 # Choose a reference clip
-st.write("Debugging audio files:")
 audio_files = list_audio_files(species)
-st.write(f"Found {len(audio_files)} audio files for species: {species}")
-if len(audio_files) > 0:
-    st.write(f"First audio file path: {audio_files[0]}")
-
 valid_files = []
 durations = {}
 for key in audio_files:
     try:
         tmp = download_to_temp(key)
-        st.write(f"Downloaded {key} to temp file: {tmp}")
         d = get_duration(path=tmp)
         durations[key] = d
-        st.write(f"Duration: {d} seconds")
         if d <= 20:
             valid_files.append(key)
-            st.write(f"Added to valid files (duration <= 20s)")
-        else:
-            st.write(f"Not added to valid files (duration > 20s)")
-    except Exception as e:
-        st.write(f"Error processing {key}: {str(e)}")
+    except Exception:
         continue
 
-st.write(f"Valid files count: {len(valid_files)}")
 if not valid_files:
-    st.write("No valid files found, attempting fallback...")
     if durations:
         valid_files = [min(durations, key=durations.get)]
-        st.write(f"Using shortest file as fallback: {valid_files[0]}")
     else:
         valid_files = audio_files
-        st.write(f"Using all files as fallback, count: {len(valid_files)}")
 
 if st.session_state.selected_key not in valid_files:
-    if valid_files:
-        st.session_state.selected_key = random.choice(valid_files)
-        st.write(f"Selected key: {st.session_state.selected_key}")
-    else:
-        st.error("No valid audio files found for this species!")
+    st.session_state.selected_key = random.choice(valid_files)
 
-if st.session_state.selected_key:
-    ref_key = st.session_state.selected_key
-    signed_url = presigned_url(ref_key)
-    st.write(f"Signed URL for audio: {signed_url}")
-    st.audio(signed_url, format="audio/mpeg")
+ref_key = st.session_state.selected_key
+audio_url = presigned_url(ref_key)
+st.audio(audio_url, format="audio/mpeg")
 
 # ---------------------------------------------------------------------
 # User recording, similarity score and UMAP

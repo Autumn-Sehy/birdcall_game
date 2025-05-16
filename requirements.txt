@@ -1,4 +1,4 @@
-streamlit>=1.30.0,<1.46.0  # Keeping a reasonable range for Streamlit
+streamlit
 torch>=2.1.0,<2.3.0
 torchaudio>=2.1.0,<2.3.0
 transformers[sentencepiece]>=4.30.0,<4.36.0

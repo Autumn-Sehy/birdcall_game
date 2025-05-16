@@ -27,9 +27,6 @@ from umap import UMAP
 
 from config import species_to_scrape
 
-# Prevent Streamlit's file-watcher from mis-inspecting torch internals
-st.set_option('server.runOnSave', False)
-
 st.set_page_config(page_title="Are you good at making bird calls?", page_icon="🪶", layout="wide")
 
 DEFAULT_BUCKET = "bird-database"

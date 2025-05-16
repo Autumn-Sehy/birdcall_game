@@ -27,9 +27,39 @@ from umap import UMAP
 
 from config import species_to_scrape
 
+"""Bird Call Mimic Game
+------------------------------------------------
+This Streamlit app lets users practise bird calls. For each round it:
+1. Chooses a random bird species from 10 options
+2. I chose the bird species due to their funky calls, knowledge I have from guiding at Glacier National Park
+3. Plays a short reference clip
+4. Lets the user record their own attempt.
+5. Computes Wav2Vec2 embeddings, cosine similarity (for the score) & a 3-D UMAP visualisation.
+"""
+import io
+import random
+import tempfile
+from pathlib import Path
+from typing import Dict, Tuple, List
+
+import boto3
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+import torch
+import torchaudio
+from librosa import get_duration
+from torchaudio.functional import resample
+from transformers.models.wav2vec2 import Wav2Vec2Model, Wav2Vec2Processor
+from umap import UMAP
+
+from config import species_to_scrape
+
+SHARE_THUMBNAIL_URL = f"https://{st.secrets.get('S3_BUCKET')}.s3.amazonaws.com/share_photo.jpg"
 st.set_page_config(
     page_title="Are you good at making bird calls?",
-    page_icon="🪶",
+    page_icon=SHARE_THUMBNAIL_URL,
     layout="wide",
 )
 
@@ -56,7 +86,7 @@ CLIENT = get_s3_client()
 
 @st.cache_data(show_spinner="Listing S3 audio keys...")
 def list_audio_keys(species: str) -> List[str]:
-    keys = []
+    keys: List[str] = []
     try:
         paginator = CLIENT.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=f"Data/{species}/"):
@@ -84,6 +114,7 @@ def download_to_temp(key: str) -> str:
         CLIENT.download_fileobj(S3_BUCKET, key, tmp)
         return tmp.name
 
+# Device setup
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
@@ -215,7 +246,7 @@ for key, val in {
     if key not in st.session_state:
         st.session_state[key] = val
 
-# Only show spinner on initial load
+# Top-of-app spinner only
 with st.spinner("Recording birds, please wait while we gather calls..."):
     species = st.session_state.current_species
     s3_keys_for_species = list_audio_keys(species)
@@ -230,25 +261,24 @@ try:
 except Exception:
     st.caption(f"(No image for {species})")
 
-# Use previously loaded audio keys
 if not s3_keys_for_species:
     st.error(f"No audio files found for {species}.")
     st.stop()
 
+# Fetch durations with spinner for user feedback
 valid_audio_keys: List[str] = []
 audio_durations: Dict[str, float] = {}
-
-# Fetch durations without spinner
-for key in s3_keys_for_species:
-    path = download_to_temp(key)
-    try:
-        dur = get_duration(path=path)
-        if dur <= 20:
-            valid_audio_keys.append(key)
-        audio_durations[key] = dur
-    except Exception as e:
-        st.warning(f"Could not get duration for {key}. Error: {e}")
-    Path(path).unlink(missing_ok=True)
+with st.spinner("Fetching audio durations..."):
+    for key in s3_keys_for_species:
+        path = download_to_temp(key)
+        try:
+            dur = get_duration(path=path)
+            if dur <= 20:
+                valid_audio_keys.append(key)
+            audio_durations[key] = dur
+        except Exception as e:
+            st.warning(f"Could not get duration for {key}. Error: {e}")
+        Path(path).unlink(missing_ok=True)
 
 if not valid_audio_keys:
     valid_audio_keys = [min(audio_durations, key=audio_durations.get)] if audio_durations else s3_keys_for_species
@@ -259,7 +289,7 @@ if not valid_audio_keys:
 st.session_state.valid_audio_keys = valid_audio_keys
 st.session_state.audio_durations = audio_durations
 
-# Choose reference
+# Choose reference audio
 if not st.session_state.selected_key or st.session_state.selected_key not in valid_audio_keys:
     st.session_state.selected_key = random.choice(valid_audio_keys)
 ref_key = st.session_state.selected_key
@@ -282,19 +312,27 @@ if user_audio and not st.session_state.mimic_submitted:
     if Path(user_path).stat().st_size > 0:
         rel_key = "/".join(ref_key.split("/")[1:])
         if rel_key in bird_embeddings:
-            ref_emb = bird_embeddings[rel_key]
-            usr_emb = compute_embedding(user_path)
-            sim = cosine_similarity(ref_emb, usr_emb)
-            score = int((sim - 0.7)/0.3*100) if sim>0.7 else 0
-            score = max(0, min(100, score))
-            st.session_state.mimic_submitted = True
-            st.metric("Similarity Score:", f"{score}%")
-            red, df_umap = get_reducer(species)
-            if red and not df_umap.empty:
-                umap_df = run_umap(red, df_umap, usr_emb)
-                fig = px.scatter_3d(umap_df, x="umap_x", y="umap_y", z="umap_z", color="type", color_discrete_map={"Bird":"#babd8d","User":"#fa9500"})
-                st.plotly_chart(fig, use_container_width=True)
-                st.caption("Your call is orange; real bird calls are green.")
+            with st.spinner("Analyzing your recording..."    ):
+                ref_emb = bird_embeddings[rel_key]
+                usr_emb = compute_embedding(user_path)
+                sim = cosine_similarity(ref_emb, usr_emb)
+                score = int((sim - 0.7)/0.3*100) if sim > 0.7 else 0
+                score = max(0, min(100, score))
+                st.session_state.mimic_submitted = True
+                st.metric("Similarity Score:", f"{score}%")
+                red, df_umap = get_reducer(species)
+                if red and not df_umap.empty:
+                    umap_df = run_umap(red, df_umap, usr_emb)
+                    fig = px.scatter_3d(
+                        umap_df,
+                        x="umap_x",
+                        y="umap_y",
+                        z="umap_z",
+                        color="type",
+                        color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"},
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.caption("Your call is orange, and the bird calls are green.")
         else:
             st.error(f"Reference embedding for {rel_key} not found.")
     Path(user_path).unlink(missing_ok=True)

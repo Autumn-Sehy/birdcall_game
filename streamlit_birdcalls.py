@@ -18,7 +18,7 @@ Known issues:
 """
 
 # -------------------------------------------------------------------------
-# Streamlit setup
+# Streamlit setup (must precede any other st.* call)
 # -------------------------------------------------------------------------
 import streamlit as st
 st.set_page_config(
@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------------------
-# Imports 
+# Imports - standard -> third-party -> local
 # -------------------------------------------------------------------------
 import io
 import os
@@ -107,20 +107,20 @@ if torch.cuda.is_available() and hasattr(torch, "set_float32_matmul_precision"):
     torch.set_float32_matmul_precision("high")
 
 
-@st.cache_resource(show_spinner="Loading Wav2Vec2...")
+@st.cache_resource(show_spinner="Fixing microphones...")
 def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
     processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
     model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h").to(device)
-    _ = model(torch.zeros(1, 16000, device=device)) 
+    _ = model(torch.zeros(1, 16000, device=device))  # warm-up
     return processor, model
 
 
 @st.cache_data(show_spinner="Fetching embeddings...")
 def load_all_embeddings() -> dict[str, np.ndarray]:
-    obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="all_embeddings.pt") 
+    obj = CLIENT.get_object(Bucket=S3_BUCKET, Key="all_embeddings.pt")  # updated key
     buf = io.BytesIO(obj["Body"].read())
     embeddings = torch.load(buf, map_location="cpu")
-    return {k: v.numpy() for k, v in embeddings.items()}  
+    return {k: v.numpy() for k, v in embeddings.items()}  # convert tensors to NumPy
 
 
 
@@ -206,9 +206,6 @@ def run_umap(reducer: UMAP, species_df: pd.DataFrame, user_emb: np.ndarray) -> p
 # Loading message at the start
 # -------------------------------------------------------------------------
 with st.spinner("Fetching birds and recording calls in the field, please wait a minute or so to load..."):
-    # -------------------------------------------------------------------------
-    # Session state init
-    # -------------------------------------------------------------------------
 
     all_species = [s for s in species_to_scrape if s != "Eastern Cattle Eagret"]
 
@@ -228,7 +225,7 @@ with st.spinner("Fetching birds and recording calls in the field, please wait a 
 # ---------------------------------------------------------------------
 st.title("Are you good at making bird calls?")
 
-img_key = f"Data/Images/{species}.jpg"
+img_key = f"Images/{species}.jpg"
 try:
     img_bytes = CLIENT.get_object(Bucket=S3_BUCKET, Key=img_key)["Body"].read()
     st.image(img_bytes)

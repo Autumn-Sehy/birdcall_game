@@ -113,16 +113,6 @@ def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     denom = np.linalg.norm(v1) * np.linalg.norm(v2)
     return dot / denom if denom != 0 else 0.0
 
-@torch.inference_mode()
-def compute_embedding(audio_path: str) -> np.ndarray:
-    waveform, sr = torchaudio.load(audio_path)
-    if sr != 16000:
-        waveform = resample(waveform, sr, 16000)
-    waveform = waveform.to(device)
-    inputs = processor(waveform.squeeze(), sampling_rate=16000, return_tensors="pt").to(device)
-    outputs = model(**inputs)
-    return outputs.last_hidden_state.mean(dim=1).squeeze().cpu().numpy()
-
 if not species_to_scrape:
     st.error("`species_to_scrape` is empty in config.py.")
     st.stop()
@@ -139,10 +129,12 @@ for key, val in {
     "selected_key": None,
     "mimic_submitted": False,
     "valid_audio_keys": None,
-    "audio_durations": None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = val
+
+# Define audio_durations outside the session state, so it's not reset on rerun
+audio_durations: Dict[str, float] = {}
 
 # Top-of-app spinner only
 with st.spinner("Recording birds, please wait while we gather calls..."):
@@ -164,9 +156,9 @@ if not s3_keys_for_species:
     st.stop()
 
 # Fetch durations with spinner for user feedback
-valid_audio_keys: List[str] = []
-audio_durations: Dict[str, float] = {}
 with st.spinner("Fetching more hummingbird feed..."):
+    valid_audio_keys: List[str] = []
+    audio_durations.clear()  # Clear previous durations
     for key in s3_keys_for_species:
         path = download_audio(key) # Use cached download
         try:
@@ -178,14 +170,13 @@ with st.spinner("Fetching more hummingbird feed..."):
             st.warning(f"Could not get duration for {key}. Error: {e}")
         Path(path).unlink(missing_ok=True)
 
-if not valid_audio_keys:
-    valid_audio_keys = [min(audio_durations, key=audio_durations.get)] if audio_durations else s3_keys_for_species
     if not valid_audio_keys:
-        st.error(f"No suitable audio for {species}.")
-        st.stop()
+        valid_audio_keys = [min(audio_durations, key=audio_durations.get)] if audio_durations else s3_keys_for_species
+        if not valid_audio_keys:
+            st.error(f"No suitable audio for {species}.")
+            st.stop()
 
-st.session_state.valid_audio_keys = valid_audio_keys
-st.session_state.audio_durations = audio_durations
+    st.session_state.valid_audio_keys = valid_audio_keys
 
 # Choose reference audio
 if not st.session_state.selected_key or st.session_state.selected_key not in valid_audio_keys:

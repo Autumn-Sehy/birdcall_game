@@ -76,8 +76,7 @@ def presigned_url(key: str, expires_sec: int = 3600) -> str:
         st.error(f"Error generating presigned URL for {key}: {e}")
         return ""
 
-@st.cache_data(show_spinner="Downloading audio...")
-def download_audio(key: str) -> str:
+def download_audio(key: str) -> str:  # Removed @st.cache_data
     suffix = Path(key).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         CLIENT.download_fileobj(S3_BUCKET, key, tmp)
@@ -112,6 +111,16 @@ def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     dot = float(np.dot(v1, v2))
     denom = np.linalg.norm(v1) * np.linalg.norm(v2)
     return dot / denom if denom != 0 else 0.0
+
+@torch.inference_mode()
+def compute_embedding(audio_path: str) -> np.ndarray:
+    waveform, sr = torchaudio.load(audio_path)
+    if sr != 16000:
+        waveform = resample(waveform, sr, 16000)
+    waveform = waveform.to(device)
+    inputs = processor(waveform.squeeze(), sampling_rate=16000, return_tensors="pt").to(device)
+    outputs = model(**inputs)
+    return outputs.last_hidden_state.mean(dim=1).squeeze().cpu().numpy()
 
 if not species_to_scrape:
     st.error("`species_to_scrape` is empty in config.py.")
@@ -160,15 +169,15 @@ with st.spinner("Fetching more hummingbird feed..."):
     valid_audio_keys: List[str] = []
     audio_durations.clear()  # Clear previous durations
     for key in s3_keys_for_species:
-        path = download_audio(key) # Use cached download
+        local_path = download_audio(key)  # Download every time
         try:
-            dur = get_duration(path=path)
+            dur = get_duration(path=local_path)
             if dur <= 20:
                 valid_audio_keys.append(key)
             audio_durations[key] = dur
         except Exception as e:
             st.warning(f"Could not get duration for {key}. Error: {e}")
-        Path(path).unlink(missing_ok=True)
+        Path(local_path).unlink(missing_ok=True)
 
     if not valid_audio_keys:
         valid_audio_keys = [min(audio_durations, key=audio_durations.get)] if audio_durations else s3_keys_for_species

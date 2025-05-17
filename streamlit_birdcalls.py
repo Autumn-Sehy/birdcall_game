@@ -95,17 +95,19 @@ def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
     return processor, model
 
 @st.cache_data(show_spinner="Fetching hummingbird beed...")
-def load_bird_embedding(key: str) -> np.ndarray | None:
+def load_all_embeddings() -> Dict[str, np.ndarray]:
+    embeddings_key = "all_embeddings.pt"
     try:
-        obj = CLIENT.get_object(Bucket=S3_BUCKET, Key=key)
+        obj = CLIENT.get_object(Bucket=S3_BUCKET, Key=embeddings_key)
         buf = io.BytesIO(obj["Body"].read())
-        embedding = torch.load(buf, map_location="cpu").cpu().numpy()
-        return embedding
+        embeddings = torch.load(buf, map_location="cpu")
+        return {k: v.cpu().numpy() for k, v in embeddings.items()}
     except Exception as e:
-        st.warning(f"Error loading embedding for {key}: {e}")
-        return None
+        st.error(f"Error loading embeddings: {e}")
+        return {}
 
 processor, model = init_model()
+bird_embeddings = load_all_embeddings()
 
 def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     dot = float(np.dot(v1, v2))
@@ -210,8 +212,8 @@ if user_audio and not st.session_state.mimic_submitted:
     if Path(user_path).stat().st_size > 0:
         rel_key = "/".join(ref_key.split("/")[1:])
         with st.spinner("Analyzing your recording..."):
-            ref_emb = load_bird_embedding(f"Embeddings/{rel_key}.pt")
-            if ref_emb is not None:
+            if rel_key in bird_embeddings:
+                ref_emb = bird_embeddings[rel_key]
                 usr_emb = compute_embedding(user_path)
                 sim = cosine_similarity(ref_emb, usr_emb)
                 score = int((sim - 0.7)/0.3*100) if sim > 0.7 else 0
@@ -219,7 +221,7 @@ if user_audio and not st.session_state.mimic_submitted:
                 st.session_state.mimic_submitted = True
                 st.metric("Similarity Score:", f"{score}%")
             else:
-                st.error(f"Reference embedding for {rel_key} not found.")
+                st.error(f"Reference embedding for {rel_key} not found in loaded embeddings.")
         Path(user_path).unlink(missing_ok=True)
 
 # Buttons

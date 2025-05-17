@@ -5,7 +5,7 @@ This Streamlit app lets users practise bird calls. For each round it:
 2. I chose the bird species due to their funky calls, knowledge I have from guiding at Glacier National Park
 3. Plays a short reference clip
 4. Lets the user record their own attempt.
-5. Computes Wav2Vec2 embeddings, cosine similarity (for the score) & a 3-D UMAP visualisation.
+5. Computes Wav2Vec2 embeddings and cosine similarity (for the score).
 """
 import io
 import random
@@ -15,15 +15,12 @@ from typing import Dict, Tuple, List
 
 import boto3
 import numpy as np
-import pandas as pd
-import plotly.express as px
 import streamlit as st
 import torch
 import torchaudio
 from librosa import get_duration
 from torchaudio.functional import resample
 from transformers.models.wav2vec2 import Wav2Vec2Model, Wav2Vec2Processor
-from umap import UMAP
 
 from config import species_to_scrape
 
@@ -79,7 +76,8 @@ def presigned_url(key: str, expires_sec: int = 3600) -> str:
         st.error(f"Error generating presigned URL for {key}: {e}")
         return ""
 
-def download_to_temp(key: str) -> str:
+@st.cache_data(show_spinner="Downloading audio...")
+def download_audio(key: str) -> str:
     suffix = Path(key).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         CLIENT.download_fileobj(S3_BUCKET, key, tmp)
@@ -98,19 +96,17 @@ def init_model() -> Tuple[Wav2Vec2Processor, Wav2Vec2Model]:
     return processor, model
 
 @st.cache_data(show_spinner="Fetching hummingbird beed...")
-def load_all_embeddings() -> Dict[str, np.ndarray]:
-    embeddings_key = "all_embeddings.pt"
+def load_bird_embedding(key: str) -> np.ndarray | None:
     try:
-        obj = CLIENT.get_object(Bucket=S3_BUCKET, Key=embeddings_key)
+        obj = CLIENT.get_object(Bucket=S3_BUCKET, Key=key)
         buf = io.BytesIO(obj["Body"].read())
-        embeddings = torch.load(buf, map_location="cpu")
-        return {k: v.cpu().numpy() for k, v in embeddings.items()}
+        embedding = torch.load(buf, map_location="cpu").cpu().numpy()
+        return embedding
     except Exception as e:
-        st.error(f"Error loading embeddings: {e}")
-        return {}
+        st.warning(f"Error loading embedding for {key}: {e}")
+        return None
 
 processor, model = init_model()
-bird_embeddings = load_all_embeddings()
 
 def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     dot = float(np.dot(v1, v2))
@@ -127,73 +123,6 @@ def compute_embedding(audio_path: str) -> np.ndarray:
     outputs = model(**inputs)
     return outputs.last_hidden_state.mean(dim=1).squeeze().cpu().numpy()
 
-@st.cache_data(show_spinner="Preparing species data...")
-def get_species_df(species: str) -> pd.DataFrame:
-    s3_audio_keys = list_audio_keys(species)
-    embeddings, files, s3_keys = [], [], []
-    temp_files = []
-    for key in s3_audio_keys:
-        relative_key = "/".join(key.split("/")[1:])
-        emb = bird_embeddings.get(relative_key)
-        if emb is None:
-            st.warning(f"Embedding NOT found for key: {key} (relative: {relative_key})")
-            local_path = download_to_temp(key)
-            temp_files.append(local_path)
-            emb = compute_embedding(local_path)
-        if emb.size > 0:
-            embeddings.append(emb)
-            files.append(Path(key).name)
-            s3_keys.append(key)
-    for f in temp_files:
-        Path(f).unlink(missing_ok=True)
-    if not embeddings:
-        return pd.DataFrame(columns=[f"dim_{i}" for i in range(768)] + ["file", "s3_key"])
-    df = pd.DataFrame(embeddings, columns=[f"dim_{i}" for i in range(embeddings[0].shape[0])])
-    df["file"] = files
-    df["s3_key"] = s3_keys
-    return df
-
-spinner_text = "Fetching birds to compare their call to yours..."
-@st.cache_resource(show_spinner=spinner_text)
-def get_reducer(species: str, n_neighbors: int = 15, min_dist: float = 0.1):
-    species_df = get_species_df(species)
-    if species_df.empty or not any(col.startswith("dim_") for col in species_df.columns):
-        st.warning(f"No embedding data for {species}.")
-        return None, species_df
-    embed_cols = [c for c in species_df.columns if c.startswith("dim_")]
-    reducer = UMAP(
-        n_components=3,
-        n_neighbors=n_neighbors,
-        min_dist=min_dist,
-        random_state=42,
-    ).fit(species_df[embed_cols].values)
-    return reducer, species_df
-
-def run_umap(reducer: UMAP, species_df: pd.DataFrame, user_emb: np.ndarray) -> pd.DataFrame:
-    if (
-        reducer is None
-        or species_df.empty
-        or user_emb is None
-        or user_emb.size == 0
-    ):
-        return pd.DataFrame()
-    embed_cols = [c for c in species_df.columns if c.startswith("dim_")]
-    coords_bird = reducer.embedding_
-    coords_user = reducer.transform(user_emb.reshape(1, -1))
-    df2 = species_df.copy()
-    df2[["umap_x", "umap_y", "umap_z"]] = coords_bird
-    user_row = dict(zip(embed_cols, user_emb))
-    user_row.update({
-        "file": "You",
-        "s3_key": "N/A-User",
-        "umap_x": float(coords_user[0, 0]),
-        "umap_y": float(coords_user[0, 1]),
-        "umap_z": float(coords_user[0, 2]),
-    })
-    df2 = pd.concat([df2, pd.DataFrame([user_row])], ignore_index=True)
-    df2["type"] = df2["file"].apply(lambda f: "User" if f == "You" else "Bird")
-    return df2
-
 if not species_to_scrape:
     st.error("`species_to_scrape` is empty in config.py.")
     st.stop()
@@ -209,8 +138,6 @@ for key, val in {
     "previous_species": [],
     "selected_key": None,
     "mimic_submitted": False,
-    "loaded_species": None,
-    "loaded_species_data": None,
     "valid_audio_keys": None,
     "audio_durations": None,
 }.items():
@@ -241,7 +168,7 @@ valid_audio_keys: List[str] = []
 audio_durations: Dict[str, float] = {}
 with st.spinner("Fetching more hummingbird feed..."):
     for key in s3_keys_for_species:
-        path = download_to_temp(key)
+        path = download_audio(key) # Use cached download
         try:
             dur = get_duration(path=path)
             if dur <= 20:
@@ -282,31 +209,18 @@ if user_audio and not st.session_state.mimic_submitted:
         user_path = tmp.name
     if Path(user_path).stat().st_size > 0:
         rel_key = "/".join(ref_key.split("/")[1:])
-        if rel_key in bird_embeddings:
-            with st.spinner("Analyzing your recording..."):
-                ref_emb = bird_embeddings[rel_key]
+        with st.spinner("Analyzing your recording..."):
+            ref_emb = load_bird_embedding(f"Embeddings/{rel_key}.pt")
+            if ref_emb is not None:
                 usr_emb = compute_embedding(user_path)
                 sim = cosine_similarity(ref_emb, usr_emb)
                 score = int((sim - 0.7)/0.3*100) if sim > 0.7 else 0
                 score = max(0, min(100, score))
                 st.session_state.mimic_submitted = True
                 st.metric("Similarity Score:", f"{score}%")
-                red, df_umap = get_reducer(species)
-                if red and not df_umap.empty:
-                    umap_df = run_umap(red, df_umap, usr_emb)
-                    fig = px.scatter_3d(
-                        umap_df,
-                        x="umap_x",
-                        y="umap_y",
-                        z="umap_z",
-                        color="type",
-                        color_discrete_map={"Bird": "#babd8d", "User": "#fa9500"},
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                    st.caption("Your call is orange, and the bird calls are green.")
-        else:
-            st.error(f"Reference embedding for {rel_key} not found.")
-    Path(user_path).unlink(missing_ok=True)
+            else:
+                st.error(f"Reference embedding for {rel_key} not found.")
+        Path(user_path).unlink(missing_ok=True)
 
 # Buttons
 col1, col2 = st.columns(2)

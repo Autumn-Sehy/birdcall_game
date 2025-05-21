@@ -7,7 +7,9 @@ This Streamlit app lets users practise bird calls. For each round it:
 4. Lets the user record their own attempt.
 5. Computes Wav2Vec2 embeddings and cosine similarity (for the score).
 """
+
 import io
+import json
 import random
 import tempfile
 from pathlib import Path
@@ -18,7 +20,6 @@ import numpy as np
 import streamlit as st
 import torch
 import torchaudio
-from librosa import get_duration
 from torchaudio.functional import resample
 from transformers.models.wav2vec2 import Wav2Vec2Model, Wav2Vec2Processor
 
@@ -52,6 +53,16 @@ def get_s3_client():
 S3_BUCKET = st.secrets.get("S3_BUCKET", DEFAULT_BUCKET)
 CLIENT = get_s3_client()
 
+@st.cache_data(show_spinner="Loading durations file...")
+def load_audio_durations() -> Dict[str, float]:
+    durations_key = "audio_durations.json"  # Adjust if you uploaded it elsewhere
+    try:
+        obj = CLIENT.get_object(Bucket=S3_BUCKET, Key=durations_key)
+        return json.load(obj["Body"])
+    except Exception as e:
+        st.error(f"Error loading durations: {e}")
+        return {}
+
 @st.cache_data(show_spinner="Listing S3 audio keys...")
 def list_audio_keys(species: str) -> List[str]:
     keys: List[str] = []
@@ -76,7 +87,7 @@ def presigned_url(key: str, expires_sec: int = 3600) -> str:
         st.error(f"Error generating presigned URL for {key}: {e}")
         return ""
 
-def download_audio(key: str) -> str:  # Removed @st.cache_data
+def download_audio(key: str) -> str:
     suffix = Path(key).suffix
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         CLIENT.download_fileobj(S3_BUCKET, key, tmp)
@@ -108,6 +119,7 @@ def load_all_embeddings() -> Dict[str, np.ndarray]:
 
 processor, model = init_model()
 bird_embeddings = load_all_embeddings()
+audio_durations = load_audio_durations()
 
 def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     dot = float(np.dot(v1, v2))
@@ -139,22 +151,30 @@ for key, val in {
     "previous_species": [],
     "selected_key": None,
     "mimic_submitted": False,
-    "valid_audio_keys": None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
-# Define audio_durations outside the session state, so it's not reset on rerun
-audio_durations: Dict[str, float] = {}
+# Load species audio keys
+species = st.session_state.current_species
+s3_keys_for_species = list_audio_keys(species)
+if not s3_keys_for_species:
+    st.error(f"No audio files found for {species}.")
+    st.stop()
 
-# Top-of-app spinner only
-with st.spinner("Recording birds, please wait while we gather calls..."):
-    species = st.session_state.current_species
-    s3_keys_for_species = list_audio_keys(species)
+# Filter audio keys by duration
+valid_audio_keys = [k for k in s3_keys_for_species if audio_durations.get(k, 999) <= 20]
+if not valid_audio_keys:
+    st.error(f"No suitable short audio found for {species}.")
+    st.stop()
 
+# Choose or keep selected reference audio
+if not st.session_state.selected_key or st.session_state.selected_key not in valid_audio_keys:
+    st.session_state.selected_key = random.choice(valid_audio_keys)
+ref_key = st.session_state.selected_key
+
+# Show title and image
 st.title("Are you good at making bird calls?")
-
-# Show reference image
 img_key = f"Images/{species}.jpg"
 try:
     img_bytes = CLIENT.get_object(Bucket=S3_BUCKET, Key=img_key)["Body"].read()
@@ -162,37 +182,7 @@ try:
 except Exception:
     st.caption(f"(No image for {species})")
 
-if not s3_keys_for_species:
-    st.error(f"No audio files found for {species}.")
-    st.stop()
-
-# Fetch durations with spinner for user feedback
-with st.spinner("Fetching more hummingbird feed..."):
-    valid_audio_keys: List[str] = []
-    audio_durations.clear()  # Clear previous durations
-    for key in s3_keys_for_species:
-        local_path = download_audio(key)  # Download every time
-        try:
-            dur = get_duration(path=local_path)
-            if dur <= 20:
-                valid_audio_keys.append(key)
-            audio_durations[key] = dur
-        except Exception as e:
-            st.warning(f"Could not get duration for {key}. Error: {e}")
-        Path(local_path).unlink(missing_ok=True)
-
-    if not valid_audio_keys:
-        valid_audio_keys = [min(audio_durations, key=audio_durations.get)] if audio_durations else s3_keys_for_species
-        if not valid_audio_keys:
-            st.error(f"No suitable audio for {species}.")
-            st.stop()
-
-    st.session_state.valid_audio_keys = valid_audio_keys
-
-# Choose reference audio
-if not st.session_state.selected_key or st.session_state.selected_key not in valid_audio_keys:
-    st.session_state.selected_key = random.choice(valid_audio_keys)
-ref_key = st.session_state.selected_key
+# Play reference audio
 ref_url = presigned_url(ref_key)
 if ref_url:
     st.audio(ref_url)
@@ -202,7 +192,8 @@ else:
 st.divider()
 st.header(f"Try to mimic the {species}!")
 
-recorder_key = f"mimic_audio_{species}_{Path(ref_key).stem if ref_key else 'no_ref'}"
+# Audio input
+recorder_key = f"mimic_audio_{species}_{Path(ref_key).stem}"
 user_audio = st.audio_input("Record your attempt here:", key=recorder_key)
 
 if user_audio and not st.session_state.mimic_submitted:
@@ -240,7 +231,7 @@ with col1:
 with col2:
     btn = st.button("🎶 Try this species again", disabled=not st.session_state.mimic_submitted)
     if btn:
-        st.session_state.selected_key = random.choice(st.session_state.valid_audio_keys)
+        st.session_state.selected_key = random.choice(valid_audio_keys)
         st.session_state.mimic_submitted = False
         if recorder_key in st.session_state:
             del st.session_state[recorder_key]
